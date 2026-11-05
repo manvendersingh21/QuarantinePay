@@ -1,0 +1,30 @@
+name: Rust verification
+on: [push, pull_request]
+permissions:
+  contents: read
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: quarantinepay
+          POSTGRES_USER: quarantinepay
+          POSTGRES_DB: quarantinepay
+        ports: ['5432:5432']
+        options: --health-cmd pg_isready --health-interval 5s --health-retries 10
+    env:
+      DATABASE_URL: postgres://quarantinepay:quarantinepay@localhost/quarantinepay
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+          components: rustfmt, clippy
+      - run: cargo fmt --all -- --check
+      - run: cargo clippy --workspace --all-targets -- -D warnings
+      - run: cargo build --workspace
+      - run: cargo test --workspace
+      - run: cargo test -p quarantinepay-server --test lifecycle -- --ignored
+      - run: cargo build -p quarantinepay-browser --target wasm32-unknown-unknown

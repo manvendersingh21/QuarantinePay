@@ -1,0 +1,162 @@
+{
+  "info": {
+    "name": "QuarantinePay \u2014 Authorize, Verify, Capture/Void",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
+    "description": "Set admin_token locally. Mint intent, create checkout, poll for approval URL, approve in browser, authorize, deliver, poll for captured/voided. Use fixtures/fail.json to demonstrate void."
+  },
+  "auth": {
+    "type": "bearer",
+    "bearer": [
+      {
+        "key": "token",
+        "value": "{{admin_token}}",
+        "type": "string"
+      }
+    ]
+  },
+  "variable": [
+    {
+      "key": "base_url",
+      "value": "http://localhost:3000"
+    },
+    {
+      "key": "merchant_id",
+      "value": "replay-merchant"
+    },
+    {
+      "key": "admin_token",
+      "value": ""
+    },
+    {
+      "key": "signed_intent",
+      "value": ""
+    },
+    {
+      "key": "order_id",
+      "value": ""
+    }
+  ],
+  "item": [
+    {
+      "name": "Buyer confirms a server-allowlisted intent",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "url": "{{base_url}}/api/intents",
+        "description": "Buyer confirms a server-allowlisted intent",
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"sku\": \"invoice-fixture-v1\",\n  \"merchant_id\": \"{{merchant_id}}\",\n  \"amount_minor\": 100,\n  \"currency\": \"USD\",\n  \"confirmed\": true\n}"
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.collectionVariables.set(\"signed_intent\", JSON.stringify(pm.response.json()));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "Consume signed intent and queue order creation",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "url": "{{base_url}}/api/checkout",
+        "description": "Consume signed intent and queue order creation",
+        "body": {
+          "mode": "raw",
+          "raw": "{{signed_intent}}"
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.collectionVariables.set(\"order_id\", pm.response.json().id);"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "Inspect durable payment state",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": "{{base_url}}/api/orders/{{order_id}}",
+        "description": "Inspect durable payment state"
+      }
+    },
+    {
+      "name": "Queue authorization after buyer approval",
+      "request": {
+        "method": "POST",
+        "header": [],
+        "url": "{{base_url}}/api/orders/{{order_id}}/authorize",
+        "description": "Queue authorization after buyer approval"
+      }
+    },
+    {
+      "name": "Submit JSON invoice artifact",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "url": "{{base_url}}/api/orders/{{order_id}}/deliveries",
+        "description": "Submit JSON invoice artifact",
+        "body": {
+          "mode": "raw",
+          "raw": "{\"version\":1,\"currency\":\"USD\",\"total_minor\":100,\"lines\":[{\"quantity\":2,\"unit_price_minor\":50}]}\n"
+        }
+      }
+    },
+    {
+      "name": "Live Channel3 catalog search",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": "{{base_url}}/api/catalog/search?query=desk+lamp",
+        "description": "Live Channel3 catalog search"
+      }
+    },
+    {
+      "name": "Muse recommendation without payment authority",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "url": "{{base_url}}/api/agent/runs",
+        "description": "Muse recommendation without payment authority",
+        "body": {
+          "mode": "raw",
+          "raw": "{\"query\": \"Recommend a digital invoice validation artifact\"}"
+        }
+      }
+    }
+  ]
+}

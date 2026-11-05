@@ -1,0 +1,7 @@
+.env
+.env.*
+!.env.example
+.local/
+target/
+*.log
+assets/quarantinepay_browser*
