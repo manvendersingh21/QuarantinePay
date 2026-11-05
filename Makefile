@@ -11,3 +11,11 @@ test:
 	cargo test --workspace
 verifier-image:
 	docker build -f Dockerfile.verifier -t quarantinepay-verifier:local .
+
+.PHONY: local-model-install local-model-serve local-model-pull
+local-model-install:
+	bash scripts/local-model.sh install
+local-model-serve:
+	bash scripts/local-model.sh serve
+local-model-pull:
+	bash scripts/local-model.sh pull

@@ -1,5 +1,6 @@
 mod config;
 mod db;
+mod inference;
 mod integrations;
 mod paypal;
 mod worker;
@@ -182,6 +183,7 @@ async fn dashboard(
     };
     Ok(Html(quarantinepay_ui::render(
         app.config.mode.to_uppercase(),
+        app.config.inference.label().into(),
         orders,
         events,
         logged,
@@ -291,11 +293,11 @@ async fn checkout(
     ))
 }
 async fn authorize_inner(app: &App, id: Uuid) -> Api<()> {
-    let result=sqlx::query("UPDATE orders SET state='authorize_pending',operation='authorize',request_id=$2,updated_at=now() WHERE id=$1 AND buyer='demo-buyer' AND state='approval_pending' AND mode=$3").bind(id).bind(Uuid::new_v4()).bind(&app.config.mode).execute(&app.pool).await?;
+    let result=sqlx::query("UPDATE orders SET state='authorize_pending',operation='authorize',request_id=$2,updated_at=now() WHERE id=$1 AND buyer='demo-buyer' AND state='approval_pending' AND mode=$3 AND (intent->'intent'->>'expires_at')::bigint>extract(epoch FROM now())").bind(id).bind(Uuid::new_v4()).bind(&app.config.mode).execute(&app.pool).await?;
     if result.rows_affected() != 1 {
         return Err(Error(
             StatusCode::CONFLICT,
-            "order is not awaiting approval".into(),
+            "order is not awaiting approval or its purchase intent has expired".into(),
         ));
     }
     Ok(())
@@ -409,7 +411,7 @@ async fn ui_agent(State(app): State<App>, h: HeaderMap, Form(q): Form<Search>) -
         return Err(Error(StatusCode::BAD_REQUEST, "query too long".into()));
     }
     let value = integrations::agent(&app, &q.query).await?;
-    db::event(&app.pool, None, "muse_recommendation", value).await?;
+    db::event(&app.pool, None, "agent_recommendation", value).await?;
     Ok(Redirect::to("/"))
 }
 async fn ui_catalog(State(app): State<App>, h: HeaderMap, Form(q): Form<Search>) -> Api<Redirect> {

@@ -11,17 +11,61 @@ services:
       test: [CMD-SHELL, 'pg_isready -U quarantinepay']
       interval: 3s
       retries: 20
+  ollama:
+    image: ollama/ollama:0.40.14
+    gpus: all
+    environment:
+      OLLAMA_HOST: 127.0.0.1:11434
+      OLLAMA_NO_CLOUD: '1'
+      OLLAMA_CONTEXT_LENGTH: '8192'
+      OLLAMA_MAX_LOADED_MODELS: '1'
+      OLLAMA_NUM_PARALLEL: '1'
+    volumes: ['models:/root/.ollama']
+    ports: ['127.0.0.1:3000:3000']
+  elastic:
+    image: docker.elastic.co/elasticsearch/elasticsearch:9.5.6
+    network_mode: service:ollama
+    environment:
+      discovery.type: single-node
+      network.host: 127.0.0.1
+      http.port: '19200'
+      transport.port: '19300'
+      xpack.security.enabled: 'false'
+      xpack.ml.enabled: 'false'
+      ingest.geoip.downloader.enabled: 'false'
+      node.store.allow_mmap: 'false'
+      ES_JAVA_OPTS: -Xms512m -Xmx512m
+    volumes: ['elastic-data:/usr/share/elasticsearch/data']
+    depends_on:
+      ollama:
+        condition: service_started
+    healthcheck:
+      test: [CMD-SHELL, 'curl -fsS http://127.0.0.1:19200/_cluster/health >/dev/null']
+      interval: 5s
+      timeout: 3s
+      retries: 30
   app:
     build: .
+    # Shared network namespace keeps the model endpoint on loopback.
+    network_mode: service:ollama
     env_file: .env
     environment:
       DATABASE_URL: postgres://quarantinepay:${QP_DATABASE_PASSWORD}@db/quarantinepay
       QP_MODE: ${QP_MODE:-replay}
-    ports: ['127.0.0.1:3000:3000']
+      QP_PRIVATE_INFERENCE: 'true'
+      QP_INFERENCE_PROVIDER: local
+      QP_LOCAL_LLM_BASE: http://127.0.0.1:11434
+      ELASTIC_URL: http://127.0.0.1:19200
     volumes: ['keys:/app/.local']
     depends_on:
       db:
         condition: service_healthy
+      elastic:
+        condition: service_healthy
+      ollama:
+        condition: service_started
 volumes:
   database:
   keys:
+  models:
+  elastic-data:

@@ -132,16 +132,16 @@
       }
     },
     {
-      "name": "Live Channel3 catalog search",
+      "name": "Private catalog search",
       "request": {
         "method": "GET",
         "header": [],
-        "url": "{{base_url}}/api/catalog/search?query=desk+lamp",
-        "description": "Live Channel3 catalog search"
+        "url": "{{base_url}}/api/catalog/search?query=invoice",
+        "description": "Private mode searches the local demo catalog; external Channel3 discovery is explicit opt-in."
       }
     },
     {
-      "name": "Muse recommendation without payment authority",
+      "name": "Local recommendation without payment authority",
       "request": {
         "method": "POST",
         "header": [
@@ -151,7 +151,7 @@
           }
         ],
         "url": "{{base_url}}/api/agent/runs",
-        "description": "Muse recommendation without payment authority",
+        "description": "Uses the local GPU model in private mode. No cloud fallback.",
         "body": {
           "mode": "raw",
           "raw": "{\"query\": \"Recommend a digital invoice validation artifact\"}"

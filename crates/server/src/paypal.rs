@@ -4,32 +4,122 @@ use quarantinepay_core::SignedIntent;
 use reqwest::Client;
 use serde_json::{Value, json};
 
+/// Structured, sanitized provider errors keep permission failures distinct from unknown outcomes.
+#[derive(Debug)]
+pub(crate) struct PayPalFailure {
+    pub status: u16,
+    pub name: String,
+    pub issues: Vec<String>,
+    pub debug_id: Option<String>,
+}
+impl PayPalFailure {
+    pub fn requires_credentials(&self) -> bool {
+        matches!(self.status, 401 | 403)
+    }
+}
+impl std::fmt::Display for PayPalFailure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "PayPal returned {} ({}): {}; debug_id={}",
+            self.status,
+            self.name,
+            self.issues.join(", "),
+            self.debug_id.as_deref().unwrap_or("unavailable")
+        )
+    }
+}
+impl std::error::Error for PayPalFailure {}
+fn safe_code(value: &Value) -> String {
+    value
+        .as_str()
+        .filter(|s| {
+            !s.is_empty()
+                && s.len() <= 100
+                && s.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_')
+        })
+        .unwrap_or("UNKNOWN")
+        .into()
+}
+async fn decode_response(response: reqwest::Response) -> Result<Value> {
+    let status = response.status();
+    if !status.is_success() {
+        let header_debug = response
+            .headers()
+            .get("paypal-debug-id")
+            .and_then(|h| h.to_str().ok())
+            .map(str::to_owned);
+        let error: Value = response.json().await.unwrap_or(Value::Null);
+        let debug_id = error["debug_id"]
+            .as_str()
+            .map(str::to_owned)
+            .or(header_debug)
+            .filter(|s| {
+                s.len() <= 100
+                    && s.bytes()
+                        .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+            });
+        let name = safe_code(
+            error
+                .get("name")
+                .or_else(|| error.get("error"))
+                .unwrap_or(&Value::Null),
+        );
+        let issues = error["details"]
+            .as_array()
+            .map(|a| a.iter().map(|d| safe_code(&d["issue"])).collect())
+            .unwrap_or_default();
+        return Err(PayPalFailure {
+            status: status.as_u16(),
+            name,
+            issues,
+            debug_id,
+        }
+        .into());
+    }
+    if status == reqwest::StatusCode::NO_CONTENT {
+        return Ok(json!({"status":"VOIDED"}));
+    }
+    Ok(response.json().await?)
+}
+
 #[derive(Clone)]
 pub struct PayPal {
     client: Client,
     replay: bool,
+    base: String,
+    client_id: String,
+    client_secret: String,
 }
 impl PayPal {
     pub fn new(client: Client, replay: bool) -> Self {
-        Self { client, replay }
+        Self {
+            client,
+            replay,
+            base: "https://api-m.sandbox.paypal.com".into(),
+            client_id: get("PAYPAL_CLIENT_ID", ""),
+            client_secret: get("PAYPAL_CLIENT_SECRET", ""),
+        }
+    }
+    #[cfg(test)]
+    pub(crate) fn for_test(client: Client, base: String) -> Self {
+        Self {
+            client,
+            replay: false,
+            base,
+            client_id: "test-client".into(),
+            client_secret: "test-secret".into(),
+        }
     }
     async fn token(&self) -> Result<String> {
         let r = self
             .client
-            .post("https://api-m.sandbox.paypal.com/v1/oauth2/token")
-            .basic_auth(
-                get("PAYPAL_CLIENT_ID", ""),
-                Some(get("PAYPAL_CLIENT_SECRET", "")),
-            )
+            .post(format!("{}/v1/oauth2/token", self.base))
+            .basic_auth(&self.client_id, Some(&self.client_secret))
             .form(&[("grant_type", "client_credentials")])
             .send()
             .await?;
-        ensure!(
-            r.status().is_success(),
-            "PayPal OAuth returned {}",
-            r.status()
-        );
-        let v: Value = r.json().await?;
+        let v = decode_response(r).await?;
         Ok(v["access_token"]
             .as_str()
             .ok_or_else(|| anyhow::anyhow!("missing access token"))?
@@ -44,46 +134,17 @@ impl PayPal {
     ) -> Result<Value> {
         let mut req = self
             .client
-            .request(method, format!("https://api-m.sandbox.paypal.com{path}"))
+            .request(method, format!("{}{path}", self.base))
             .bearer_auth(self.token().await?)
-            .header("PayPal-Request-Id", request_id)
+            .header("Content-Type", "application/json")
             .header("Prefer", "return=representation");
+        if !request_id.is_empty() {
+            req = req.header("PayPal-Request-Id", request_id);
+        }
         if let Some(body) = body {
             req = req.json(&body);
         }
-        let response = req.send().await?;
-        let status = response.status();
-        if !status.is_success() {
-            let error: Value = response.json().await.unwrap_or(Value::Null);
-            // Report provider issue codes only; never log response values or buyer details.
-            let code = |v: &Value| {
-                v.as_str()
-                    .filter(|s| {
-                        s.len() <= 100
-                            && s.bytes()
-                                .all(|b| b.is_ascii_uppercase() || b.is_ascii_digit() || b == b'_')
-                    })
-                    .unwrap_or("UNKNOWN")
-                    .to_string()
-            };
-            let issues = error["details"]
-                .as_array()
-                .map(|a| {
-                    a.iter()
-                        .map(|d| code(&d["issue"]))
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                })
-                .unwrap_or_default();
-            anyhow::bail!(
-                "PayPal operation returned {status} ({}): {issues}",
-                code(&error["name"])
-            );
-        }
-        if status == reqwest::StatusCode::NO_CONTENT {
-            return Ok(json!({"status":"VOIDED"}));
-        }
-        Ok(response.json().await?)
+        decode_response(req.send().await?).await
     }
     pub async fn create(
         &self,
@@ -153,14 +214,13 @@ impl PayPal {
             )
             .await?;
         let status = auth["status"].as_str().unwrap_or("");
-        if capture && status == "CAPTURED" {
-            return Ok(json!({"status":"COMPLETED","reconciled_authorization":auth}));
-        }
+        // Authorization CAPTURED is not proof that the individual capture settled.
+        // Replay the exact persisted capture request ID and use its actual status.
         if !capture && status == "VOIDED" {
             return Ok(auth);
         }
         ensure!(
-            status == "CREATED",
+            status == "CREATED" || (capture && status == "CAPTURED"),
             "authorization cannot be resolved from {status}"
         );
         let op = if capture { "capture" } else { "void" };
@@ -197,5 +257,103 @@ impl PayPal {
             "webhook signature rejected"
         );
         Ok(())
+    }
+}
+
+#[cfg(test)]
+pub(crate) async fn mock_resolution_failure(
+    status: u16,
+) -> (
+    PayPal,
+    std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    tokio::task::JoinHandle<()>,
+) {
+    use axum::{
+        Json, Router,
+        routing::{get, post},
+    };
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
+    let attempts = Arc::new(AtomicUsize::new(0));
+    let count = attempts.clone();
+    let router=Router::new()
+        .route("/v1/oauth2/token",post(||async{Json(json!({"access_token":"fake-test-token"}))}))
+        .route("/v2/payments/authorizations/{id}",get(||async{Json(json!({"status":"CREATED"}))}))
+        .route("/v2/payments/authorizations/{id}/void",post(move |headers:axum::http::HeaderMap|{
+            let count=count.clone();async move {
+                assert_eq!(headers["Content-Type"],"application/json");
+                assert!(!headers["PayPal-Request-Id"].is_empty());
+                count.fetch_add(1,Ordering::SeqCst);
+                (axum::http::StatusCode::from_u16(status).unwrap(),Json(json!({"name":"NOT_AUTHORIZED","debug_id":"test-debug-403","details":[{"issue":"PERMISSION_DENIED","description":"DO_NOT_LOG_PRIVATE_RESPONSE_VALUES"}]})))
+            }
+        }));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base = format!("http://{}", listener.local_addr().unwrap());
+    let handle = tokio::spawn(async move {
+        axum::serve(listener, router).await.unwrap();
+    });
+    (PayPal::for_test(Client::new(), base), attempts, handle)
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[tokio::test]
+    async fn captured_authorization_does_not_fabricate_completed_capture() {
+        use axum::{
+            Json, Router,
+            routing::{get, post},
+        };
+        let router = Router::new()
+            .route(
+                "/v1/oauth2/token",
+                post(|| async { Json(json!({"access_token":"fake"})) }),
+            )
+            .route(
+                "/v2/payments/authorizations/test-auth",
+                get(|| async { Json(json!({"status":"CAPTURED"})) }),
+            )
+            .route(
+                "/v2/payments/authorizations/test-auth/capture",
+                post(|headers: axum::http::HeaderMap| async move {
+                    assert_eq!(headers["PayPal-Request-Id"], "original-request");
+                    Json(json!({"id":"test-capture","status":"PENDING"}))
+                }),
+            );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            axum::serve(listener, router).await.unwrap();
+        });
+        let paypal = PayPal::for_test(Client::new(), format!("http://{address}"));
+        let value = paypal
+            .resolve("test-auth", true, "original-request")
+            .await
+            .unwrap();
+        assert_eq!(value["status"], "PENDING");
+        assert_eq!(value["id"], "test-capture");
+        server.abort();
+    }
+    #[tokio::test]
+    async fn provider_errors_keep_permission_classification_and_redact_response_values() {
+        for (status, needs_credentials) in [(401, true), (403, true), (429, false), (500, false)] {
+            let (paypal, attempts, server) = mock_resolution_failure(status).await;
+            let error = paypal
+                .resolve("test-authorization", false, "stable-test-request")
+                .await
+                .unwrap_err();
+            let failure = error.downcast_ref::<PayPalFailure>().unwrap();
+            assert_eq!(failure.status, status);
+            assert_eq!(failure.requires_credentials(), needs_credentials);
+            assert_eq!(failure.debug_id.as_deref(), Some("test-debug-403"));
+            assert!(
+                !error
+                    .to_string()
+                    .contains("DO_NOT_LOG_PRIVATE_RESPONSE_VALUES")
+            );
+            assert_eq!(attempts.load(std::sync::atomic::Ordering::SeqCst), 1);
+            server.abort();
+        }
     }
 }

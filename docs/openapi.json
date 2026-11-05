@@ -13,7 +13,7 @@
   "paths": {
     "/api/catalog/search": {
       "get": {
-        "summary": "Live Channel3 catalog search",
+        "summary": "Search the local demo catalog or explicitly enabled Channel3 catalog",
         "operationId": "LiveApiCatalogSearch",
         "responses": {
           "200": {
@@ -49,7 +49,7 @@
     },
     "/api/agent/runs": {
       "post": {
-        "summary": "Muse recommendation without payment authority",
+        "summary": "Recommendation without payment authority",
         "operationId": "MuseApiAgentRuns",
         "responses": {
           "200": {
@@ -79,7 +79,8 @@
               }
             }
           }
-        }
+        },
+        "description": "Private mode uses the local Qwen model with no cloud fallback. Muse requires explicit opt-in to external inference."
       }
     },
     "/api/intents": {

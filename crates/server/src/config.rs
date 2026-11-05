@@ -5,6 +5,7 @@ use std::{env, path::PathBuf};
 #[derive(Clone)]
 pub struct Config {
     pub mode: String,
+    pub inference: crate::inference::InferenceConfig,
     pub base: String,
     pub bind: String,
     pub database: String,
@@ -41,6 +42,8 @@ impl Config {
     pub fn load() -> Result<Self> {
         dotenvy::dotenv().ok();
         std::fs::create_dir_all(".local")?;
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(".local", std::fs::Permissions::from_mode(0o700))?;
         let mode = get("QP_MODE", "replay");
         ensure!(
             ["replay", "sandbox"].contains(&mode.as_str()),
@@ -89,6 +92,7 @@ impl Config {
             "invalid verifier mode"
         );
         Ok(Self {
+            inference: crate::inference::InferenceConfig::from_env()?,
             mode,
             base: get("QP_PUBLIC_BASE", "http://localhost:3000"),
             bind: get("QP_BIND", "127.0.0.1:3000"),

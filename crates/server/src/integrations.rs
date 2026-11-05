@@ -2,7 +2,32 @@ use crate::{App, config::get};
 use anyhow::{Result, ensure};
 use serde_json::{Value, json};
 
+fn elastic_headers() -> Result<reqwest::header::HeaderMap> {
+    let mut headers = reqwest::header::HeaderMap::new();
+    let key = get("ELASTIC_API_KEY", "");
+    if !key.is_empty() {
+        headers.insert(
+            reqwest::header::AUTHORIZATION,
+            reqwest::header::HeaderValue::from_str(&format!("ApiKey {key}"))?,
+        );
+    }
+    Ok(headers)
+}
 pub async fn catalog(app: &App, query: &str) -> Result<Value> {
+    if app.config.inference.private {
+        let text = "Invoice validation artifact. A deterministic USD 1.00 JSON invoice fixture for testing delivery verification.";
+        let matches = query
+            .split_whitespace()
+            .any(|word| text.to_lowercase().contains(&word.to_lowercase()));
+        let items = if matches && !screen(app, text).await? {
+            json!([{"product":{"title":"Invoice validation artifact","description":text,"sku":"invoice-fixture-v1","amount_minor":100,"currency":"USD"},"flagged":false,"source":"Local demo catalog","purchasable_in_demo":true}])
+        } else {
+            json!([])
+        };
+        return Ok(
+            json!({"source":"Local demo catalog","items":items,"private_inference":true,"notice":"Private mode: this search stays on your system. External catalog search is disabled."}),
+        );
+    }
     let key = get("CHANNEL3_API_KEY", "");
     ensure!(!key.is_empty(), "CHANNEL3_API_KEY not configured");
     let response = app
@@ -64,9 +89,16 @@ pub async fn prepare_elastic(app: &App) -> Result<()> {
     if base.is_empty() {
         return Ok(());
     }
+    if app.config.inference.private {
+        crate::inference::loopback_url(&base)?;
+    }
+    let client = if app.config.inference.private {
+        crate::inference::private_client(std::time::Duration::from_secs(15))?
+    } else {
+        app.client.clone()
+    };
     let base = base.trim_end_matches('/');
-    let auth = format!("ApiKey {}", get("ELASTIC_API_KEY", ""));
-    let response=app.client.put(format!("{base}/quarantinepay-attacks")).header("Authorization",&auth).json(&json!({"mappings":{"properties":{"text":{"type":"text"},"embedding":{"type":"dense_vector","dims":128,"index":true,"similarity":"cosine"}}}})).send().await?;
+    let response=client.put(format!("{base}/quarantinepay-attacks")).headers(elastic_headers()?).json(&json!({"mappings":{"properties":{"text":{"type":"text"},"embedding":{"type":"dense_vector","dims":128,"index":true,"similarity":"cosine"}}}})).send().await?;
     let status = response.status();
     let body: Value = response.json().await?;
     ensure!(
@@ -82,12 +114,11 @@ pub async fn prepare_elastic(app: &App) -> Result<()> {
     .iter()
     .enumerate()
     {
-        let response = app
-            .client
+        let response = client
             .put(format!(
                 "{base}/quarantinepay-attacks/_doc/{i}?refresh=true"
             ))
-            .header("Authorization", &auth)
+            .headers(elastic_headers()?)
             .json(&json!({"text":text,"embedding":embedding(text)}))
             .send()
             .await?;
@@ -106,12 +137,28 @@ async fn screen(app: &App, text: &str) -> Result<bool> {
     ]
     .iter()
     .any(|s| lower.contains(s));
+    if heuristic {
+        return Ok(true);
+    }
+    if app.config.inference.provider == crate::inference::Provider::Local
+        && crate::inference::suspicious(&app.config.inference, text).await?
+    {
+        return Ok(true);
+    }
     let base = get("ELASTIC_URL", "");
     if base.is_empty() {
-        return Ok(heuristic);
+        return Ok(false);
     }
-    // Deterministic hashed bag-of-words vectors, not a trained injection classifier.
-    let response=app.client.post(format!("{}/quarantinepay-attacks/_search",base.trim_end_matches('/'))).header("Authorization",format!("ApiKey {}",get("ELASTIC_API_KEY","")))
+    if app.config.inference.private {
+        crate::inference::loopback_url(&base)?;
+    }
+    let client = if app.config.inference.private {
+        crate::inference::private_client(std::time::Duration::from_secs(15))?
+    } else {
+        app.client.clone()
+    };
+    // Deterministic hashed bag-of-words vectors supplement local model screening.
+    let response=client.post(format!("{}/quarantinepay-attacks/_search",base.trim_end_matches('/'))).headers(elastic_headers()?)
  .json(&json!({"size":1,"knn":{"field":"embedding","query_vector":embedding(text),"k":1,"num_candidates":10}})).send().await?;
     ensure!(
         response.status().is_success(),
@@ -124,6 +171,13 @@ async fn screen(app: &App, text: &str) -> Result<bool> {
             .is_some_and(|s| s >= 0.85))
 }
 pub async fn agent(app: &App, query: &str) -> Result<Value> {
+    if app.config.inference.provider == crate::inference::Provider::Local {
+        return crate::inference::recommend(&app.config.inference, query).await;
+    }
+    ensure!(
+        !app.config.inference.private,
+        "cloud inference is disabled in private mode"
+    );
     let key = get("MUSE_API_KEY", &get("MODEL_API_KEY", ""));
     ensure!(!key.is_empty(), "Muse API key not configured");
     let response=app.client.post(format!("{}/chat/completions",get("MUSE_API_BASE","https://api.meta.ai/v1").trim_end_matches('/'))).bearer_auth(key)

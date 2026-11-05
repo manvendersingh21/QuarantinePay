@@ -2,6 +2,7 @@ use leptos::prelude::*;
 use serde_json::Value;
 pub fn render(
     mode: String,
+    inference_label: String,
     orders: Vec<Value>,
     events: Vec<Value>,
     logged_in: bool,
@@ -19,7 +20,7 @@ pub fn render(
             matches!(
                 o["state"].as_str(),
                 Some("authorized" | "quarantined" | "capture_pending" | "void_pending")
-            )
+            ) || (o["state"] == "reconciliation_required" && o["authorization_id"].is_string())
         })
         .count();
     let captured = orders.iter().filter(|o| o["state"] == "captured").count();
@@ -41,14 +42,14 @@ pub fn render(
     let document = view! {
     <html lang="en"><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width,initial-scale=1"/><title>"QuarantinePay · Payment control center"</title><link rel="stylesheet" href="/style.css"/><script type="module" src="/assets/loader.js"></script></head>
     <body data-event-id=event_id data-auth=logged_in.to_string()><aside><div class="brand"><span class="logo">"Q"</span>"QuarantinePay"</div><div class="workspace-label">"PAYMENT OPERATIONS"</div><a class="nav active" href="/">"◈  Command center"</a><a class="nav" href="/docs">"↗  API & setup"</a><div class="aside-foot"><span class="dot"></span>"Rust security gateway"<p>"Verify delivery. Then settle."</p></div></aside>
-    <main><header><div><div class="eyebrow">"TRUST IS VERIFIED"</div><h1>"Payment control center"</h1><p class="muted">"Every purchase bound. Every delivery verified. Every settlement accounted for."</p></div><span class="mode">{mode.clone()}" MODE"</span></header>
+    <main><header><div><div class="eyebrow">"TRUST IS VERIFIED"</div><h1>"Payment control center"</h1><p class="muted">"Every purchase bound. Every delivery verified. Every settlement accounted for."</p></div><div class="runtime-badges"><span class="mode">{mode.clone()}" MODE"</span><span class="privacy-label">{inference_label}</span></div></header>
     <div hidden=!show_message><div class="notice">{message.clone()}</div></div>
     <div hidden=logged_in><section class="panel login"><h2>"Open your workspace"</h2><p class="muted">"Sign in with your local administrator password."</p><form method="post" action="/login"><input type="password" name="password" placeholder="Workspace password" required/><button>"Sign in"</button></form></section></div>
     <div hidden=!logged_in><section class="stats"><div><span>"Active authorization holds"</span><strong>{holds}</strong><small>"Awaiting verified resolution"</small></div><div><span>"Verified & captured"</span><strong>{captured}</strong><small>"Provider-confirmed settlements"</small></div><div><span>"Voided authorizations"</span><strong>{voided}</strong><small>"Failed checks or expired windows"</small></div></section>
     <div class="columns"><section><div class="section-head"><h2>"Quarantine timeline"</h2><a href="/" class="muted">"Refresh status ↻"</a></div><div class="panel purchase"><div><span class="eyebrow">"CONTROLLED DIGITAL DELIVERY"</span><h3>"Validated invoice artifact"</h3><p class="muted">"USD 1.00 · deterministic acceptance policy · 120-second window"</p></div><form method="post" action="/ui/purchase"><button>"Confirm intent & checkout →"</button></form></div>{cards}
-    <section class="panel"><h2>"Shopping assistant"</h2><p class="muted">"Muse recommends; your confirmed intent controls payment."</p><form method="post" action="/ui/agent"><input name="query" placeholder="Ask Muse for a recommendation" required maxlength="2000"/><button>"Ask Muse"</button></form><form method="post" action="/ui/catalog"><input name="query" placeholder="Search the live Channel3 catalog" required maxlength="200"/><button class="secondary">"Search catalog"</button></form></section></section>
+    <section class="panel"><h2>"Shopping assistant"</h2><p class="muted">"Recommendations are checked against your confirmed purchase intent."</p><form method="post" action="/ui/agent"><input name="query" placeholder="Ask for a recommendation" required maxlength="2000"/><button>"Ask assistant"</button></form><form method="post" action="/ui/catalog"><input name="query" placeholder="Search the product catalog" required maxlength="200"/><button class="secondary">"Search catalog"</button></form></section></section>
     <section><div class="section-head"><h2>"Security activity"</h2><span class="badge">"AUDIT LOG"</span></div><div class="panel"><ul class="audit">{audit}</ul></div><div class="panel jurisdiction"><form method="post" action="/ui/redteam"><button class="danger">"Simulate merchant substitution"</button></form><h3>"Agent jurisdiction"</h3><p><b>"L0"</b>" Read screened catalog"</p><p><b>"L1"</b>" Recommend a purchase"</p><p><b>"L2"</b>" Buyer confirms signed intent"</p><p><b>"L3"</b>" Gateway authorizes payment"</p><p><b>"L4"</b>" Verifier gates settlement"</p><small class="muted">"Application permission levels. Model output grants no payment authority."</small></div></section></div></div>
-    <footer>"Sandbox demonstration · Authorization holds are not escrow · "<a href="https://github.com/manvendersingh21/QuarantinePay">"Source code ↗"</a></footer></main></body></html>};
+    <footer>"Sandbox demonstration · Payment fields go to PayPal · "<a href="https://github.com/manvendersingh21/QuarantinePay">"Source code ↗"</a></footer></main></body></html>};
     format!("<!DOCTYPE html>{}", document.to_html())
 }
 pub const CSS: &str = r#"
@@ -71,6 +72,8 @@ h3 { font-size: 16px; margin: 8px 0; }
 .eyebrow { font-size: 10px; letter-spacing: 2px; color: var(--mint); font-weight: 650; }
 .muted { color: var(--muted); }
 .mode, .badge { white-space: nowrap; border: 1px solid #d4d4d4; border-radius: 6px; padding: 4px 9px; font-size: 10px; letter-spacing: 1px; color: #525252; }
+.runtime-badges { display: flex; flex-direction: column; align-items: flex-end; gap: 8px; }
+.privacy-label { color: var(--mint); font-size: 10px; letter-spacing: .6px; text-align: right; }
 .mode { background: #edf8f2; color: var(--mint); border-color: #b8ddcb; margin-top: 14px; text-transform: uppercase; }
 .stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 18px; margin-bottom: 35px; }
 .stats > div, .panel, .order { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 22px; }
