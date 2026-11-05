@@ -161,6 +161,43 @@ async fn payment_security_and_recovery() {
             .status(),
         StatusCode::CONFLICT
     );
+    // A mode change cannot consume an intent issued in another environment.
+    let cross_mode = mint(&client, &base).await;
+    let cross_id = Uuid::parse_str(cross_mode["intent"]["id"].as_str().unwrap()).unwrap();
+    sqlx::query("UPDATE intents SET mode='sandbox' WHERE id=$1")
+        .bind(cross_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        client
+            .post(format!("{base}/api/checkout"))
+            .json(&cross_mode)
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::CONFLICT
+    );
+    // The replay service must neither display nor process Sandbox orders.
+    let hidden = Uuid::new_v4();
+    sqlx::query("INSERT INTO orders(id,buyer,intent,state,mode,operation,request_id) SELECT $1,buyer,token,'create_pending','sandbox','create',$2 FROM intents WHERE id=$3").bind(hidden).bind(Uuid::new_v4()).bind(cross_id).execute(&pool).await.unwrap();
+    assert_eq!(
+        client
+            .get(format!("{base}/api/orders/{hidden}"))
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::NOT_FOUND
+    );
+    tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+    let state: String = sqlx::query_scalar("SELECT state FROM orders WHERE id=$1")
+        .bind(hidden)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(state, "create_pending");
     let passing = create(&client, &base).await;
     let pass: Value = serde_json::from_str(include_str!("../../../fixtures/pass.json")).unwrap();
     client

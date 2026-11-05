@@ -66,12 +66,22 @@ impl Config {
             },
         );
         if mode == "sandbox" {
-            for name in ["PAYPAL_CLIENT_ID", "PAYPAL_CLIENT_SECRET"] {
+            for name in [
+                "PAYPAL_CLIENT_ID",
+                "PAYPAL_CLIENT_SECRET",
+                "PAYPAL_MERCHANT_ID",
+            ] {
                 ensure!(
                     !env::var(name).unwrap_or_default().is_empty(),
                     "missing {name}"
                 );
             }
+        }
+        if mode == "sandbox" {
+            ensure!(
+                merchant.len() == 13 && merchant.bytes().all(|b| b.is_ascii_alphanumeric()),
+                "PAYPAL_MERCHANT_ID must be the 13-character merchant ID of the Sandbox business account"
+            );
         }
         let verifier_mode = get("QP_VERIFIER_MODE", "trusted-process");
         ensure!(

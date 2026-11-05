@@ -71,6 +71,7 @@ async fn process(app: &App, id: uuid::Uuid) -> Result<()> {
         .bind(id)
         .fetch_one(&mut *tx)
         .await?;
+    ensure!(order.mode == app.config.mode, "payment mode mismatch");
     let signed: SignedIntent = serde_json::from_value(order.intent.clone())?;
     // Expiry forbids new purchases; a previously authorized payment must still be voidable after expiry.
     signed.verify(
@@ -205,9 +206,9 @@ async fn process(app: &App, id: uuid::Uuid) -> Result<()> {
             .await?;
             tx.commit().await?;
         }
-        Err(_) => {
+        Err(error) => {
             tx.commit().await?;
-            tracing::warn!(%id, operation=?order.operation,"provider outcome pending; retrying with stable request ID");
+            tracing::warn!(%id, operation=?order.operation,error=%error,"provider outcome pending; retrying with stable request ID");
         }
     }
     Ok(())
@@ -216,7 +217,7 @@ pub async fn run(app: App) {
     let mut interval = tokio::time::interval(std::time::Duration::from_secs(2));
     loop {
         interval.tick().await;
-        let ids=sqlx::query_scalar::<_,uuid::Uuid>("SELECT id FROM orders WHERE state IN ('create_pending','authorize_pending','authorized','quarantined','capture_pending','void_pending') ORDER BY updated_at LIMIT 100").fetch_all(&app.pool).await;
+        let ids=sqlx::query_scalar::<_,uuid::Uuid>("SELECT id FROM orders WHERE mode=$1 AND state IN ('create_pending','authorize_pending','authorized','quarantined','capture_pending','void_pending') ORDER BY updated_at LIMIT 100").bind(&app.config.mode).fetch_all(&app.pool).await;
         match ids {
             Ok(ids) => {
                 for id in ids {

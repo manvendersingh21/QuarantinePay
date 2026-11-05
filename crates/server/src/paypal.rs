@@ -53,10 +53,33 @@ impl PayPal {
         }
         let response = req.send().await?;
         let status = response.status();
-        ensure!(
-            status.is_success(),
-            "PayPal operation returned {status}; reconcile provider state before further action"
-        );
+        if !status.is_success() {
+            let error: Value = response.json().await.unwrap_or(Value::Null);
+            // Report provider issue codes only; never log response values or buyer details.
+            let code = |v: &Value| {
+                v.as_str()
+                    .filter(|s| {
+                        s.len() <= 100
+                            && s.bytes()
+                                .all(|b| b.is_ascii_uppercase() || b.is_ascii_digit() || b == b'_')
+                    })
+                    .unwrap_or("UNKNOWN")
+                    .to_string()
+            };
+            let issues = error["details"]
+                .as_array()
+                .map(|a| {
+                    a.iter()
+                        .map(|d| code(&d["issue"]))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                })
+                .unwrap_or_default();
+            anyhow::bail!(
+                "PayPal operation returned {status} ({}): {issues}",
+                code(&error["name"])
+            );
+        }
         if status == reqwest::StatusCode::NO_CONTENT {
             return Ok(json!({"status":"VOIDED"}));
         }

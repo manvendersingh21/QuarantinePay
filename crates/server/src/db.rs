@@ -9,6 +9,7 @@ pub struct Order {
     pub buyer: String,
     pub intent: Value,
     pub state: String,
+    pub mode: String,
     pub paypal_order: Option<String>,
     pub authorization_id: Option<String>,
     pub approval_url: Option<String>,

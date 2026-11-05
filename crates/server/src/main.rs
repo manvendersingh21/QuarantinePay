@@ -164,8 +164,9 @@ async fn dashboard(
     let logged = authenticated(&app, &h, false).is_ok();
     let orders = if logged {
         sqlx::query_as::<_, Order>(
-            "SELECT * FROM orders WHERE buyer='demo-buyer' ORDER BY updated_at DESC LIMIT 30",
+            "SELECT * FROM orders WHERE buyer='demo-buyer' AND mode=$1 ORDER BY updated_at DESC LIMIT 30",
         )
+        .bind(&app.config.mode)
         .fetch_all(&app.pool)
         .await?
         .into_iter()
@@ -175,7 +176,7 @@ async fn dashboard(
         Vec::new()
     };
     let events = if logged {
-        sqlx::query_scalar::<_,Value>("SELECT jsonb_build_object('id',id,'kind',kind,'detail',detail,'at',created_at) FROM events WHERE buyer='demo-buyer' ORDER BY id DESC LIMIT 30").fetch_all(&app.pool).await?
+        sqlx::query_scalar::<_,Value>("SELECT jsonb_build_object('id',id,'kind',kind,'detail',detail,'at',created_at) FROM events WHERE buyer='demo-buyer' AND (order_id IS NULL OR order_id IN (SELECT id FROM orders WHERE mode=$1)) ORDER BY id DESC LIMIT 30").bind(&app.config.mode).fetch_all(&app.pool).await?
     } else {
         Vec::new()
     };
@@ -221,10 +222,11 @@ async fn mint(app: &App, input: Confirmation) -> Api<SignedIntent> {
         policy_digest: policy_digest(),
     };
     let signed = SignedIntent::sign(intent, &app.config.key)?;
-    sqlx::query("INSERT INTO intents(id,buyer,token) VALUES($1,$2,$3)")
+    sqlx::query("INSERT INTO intents(id,buyer,token,mode) VALUES($1,$2,$3,$4)")
         .bind(signed.intent.id)
         .bind(&signed.intent.buyer)
         .bind(serde_json::to_value(&signed).unwrap())
+        .bind(&app.config.mode)
         .execute(&app.pool)
         .await?;
     Ok(signed)
@@ -259,7 +261,7 @@ async fn checkout_inner(app: &App, signed: SignedIntent) -> Api<Uuid> {
         ));
     }
     let mut tx = app.pool.begin().await?;
-    let consumed=sqlx::query("UPDATE intents SET used=true WHERE id=$1 AND buyer='demo-buyer' AND token=$2 AND used=false").bind(signed.intent.id).bind(serde_json::to_value(&signed).unwrap()).execute(&mut *tx).await?;
+    let consumed=sqlx::query("UPDATE intents SET used=true WHERE id=$1 AND buyer='demo-buyer' AND token=$2 AND used=false AND mode=$3").bind(signed.intent.id).bind(serde_json::to_value(&signed).unwrap()).bind(&app.config.mode).execute(&mut *tx).await?;
     if consumed.rows_affected() != 1 {
         return Err(Error(
             StatusCode::CONFLICT,
@@ -267,7 +269,7 @@ async fn checkout_inner(app: &App, signed: SignedIntent) -> Api<Uuid> {
         ));
     }
     let id = Uuid::new_v4();
-    sqlx::query("INSERT INTO orders(id,buyer,intent,state,operation,request_id) VALUES($1,'demo-buyer',$2,'create_pending','create',$3)").bind(id).bind(serde_json::to_value(&signed).unwrap()).bind(Uuid::new_v4()).execute(&mut *tx).await?;
+    sqlx::query("INSERT INTO orders(id,buyer,intent,state,operation,request_id,mode) VALUES($1,'demo-buyer',$2,'create_pending','create',$3,$4)").bind(id).bind(serde_json::to_value(&signed).unwrap()).bind(Uuid::new_v4()).bind(&app.config.mode).execute(&mut *tx).await?;
     db::event_tx(
         &mut tx,
         Some(id),
@@ -289,7 +291,7 @@ async fn checkout(
     ))
 }
 async fn authorize_inner(app: &App, id: Uuid) -> Api<()> {
-    let result=sqlx::query("UPDATE orders SET state='authorize_pending',operation='authorize',request_id=$2,updated_at=now() WHERE id=$1 AND buyer='demo-buyer' AND state='approval_pending'").bind(id).bind(Uuid::new_v4()).execute(&app.pool).await?;
+    let result=sqlx::query("UPDATE orders SET state='authorize_pending',operation='authorize',request_id=$2,updated_at=now() WHERE id=$1 AND buyer='demo-buyer' AND state='approval_pending' AND mode=$3").bind(id).bind(Uuid::new_v4()).bind(&app.config.mode).execute(&app.pool).await?;
     if result.rows_affected() != 1 {
         return Err(Error(
             StatusCode::CONFLICT,
@@ -310,7 +312,7 @@ async fn deliver_inner(app: &App, id: Uuid, artifact: Value) -> Api<()> {
             "artifact too large".into(),
         ));
     }
-    let result=sqlx::query("UPDATE orders SET artifact=$2,state='quarantined',updated_at=now() WHERE id=$1 AND buyer='demo-buyer' AND state='authorized' AND deadline>now()").bind(id).bind(artifact).execute(&app.pool).await?;
+    let result=sqlx::query("UPDATE orders SET artifact=$2,state='quarantined',updated_at=now() WHERE id=$1 AND buyer='demo-buyer' AND state='authorized' AND deadline>now() AND mode=$3").bind(id).bind(artifact).bind(&app.config.mode).execute(&app.pool).await?;
     if result.rows_affected() != 1 {
         return Err(Error(
             StatusCode::CONFLICT,
@@ -331,8 +333,9 @@ async fn deliver(
 }
 async fn order(State(app): State<App>, h: HeaderMap, Path(id): Path<Uuid>) -> Api<Json<Order>> {
     authenticated(&app, &h, false)?;
-    let o = sqlx::query_as("SELECT * FROM orders WHERE id=$1 AND buyer='demo-buyer'")
+    let o = sqlx::query_as("SELECT * FROM orders WHERE id=$1 AND buyer='demo-buyer' AND mode=$2")
         .bind(id)
+        .bind(&app.config.mode)
         .fetch_optional(&app.pool)
         .await?
         .ok_or_else(|| Error(StatusCode::NOT_FOUND, "order not found".into()))?;
@@ -469,7 +472,7 @@ async fn events(
     let last = cursor.after.unwrap_or(0).max(0);
     let stream = futures_util::stream::unfold((app, last), |(app, last)| async move {
         tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-        let rows=sqlx::query_scalar::<_,Value>("SELECT jsonb_build_object('id',id,'kind',kind,'order_id',order_id,'detail',detail,'at',created_at) FROM events WHERE buyer='demo-buyer' AND id>$1 ORDER BY id LIMIT 100").bind(last).fetch_all(&app.pool).await.unwrap_or_default();
+        let rows=sqlx::query_scalar::<_,Value>("SELECT jsonb_build_object('id',id,'kind',kind,'order_id',order_id,'detail',detail,'at',created_at) FROM events WHERE buyer='demo-buyer' AND id>$1 AND (order_id IS NULL OR order_id IN (SELECT id FROM orders WHERE mode=$2)) ORDER BY id LIMIT 100").bind(last).bind(&app.config.mode).fetch_all(&app.pool).await.unwrap_or_default();
         let next = rows.last().and_then(|r| r["id"].as_i64()).unwrap_or(last);
         Some((
             Ok(Event::default()
