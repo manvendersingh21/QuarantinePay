@@ -12,3 +12,5 @@ Use the phrasing “AI reasoning and delivery verification stay on our server; P
 Use replay mode for rehearsal and clearly identify it. Record real Sandbox payment evidence only after buyer approval. Avoid claiming escrow, instant production release, or complete injection detection. Do not show credentials, browser session cookies, or personal account information on video.
 
 Submission: choose applicable tracks, verify the current official rules, provide repository access, upload an unlisted video under three minutes, and submit through the user's Devpost account. These account and video actions are not automated by the application.
+
+A narrated local recording was generated at `.local/quarantinepay-demo.mp4` in the validated workspace: 146.2 seconds, H.264 video and AAC audio. Only the application page is recorded; PayPal credential and login screens are excluded. The file is kept outside Git until publication.

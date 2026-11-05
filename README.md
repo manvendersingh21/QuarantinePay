@@ -15,6 +15,8 @@ Requires stable Rust, PostgreSQL 16+, and (for the live browser timeline) `wasm3
 5. Run `RUST_LOG=info cargo run -p quarantinepay-server` from the repository root. Open `http://localhost:3000`.
 6. If no password was configured, read the generated password locally with `od -An -v -tx1 .local/admin-password | tr -d ' \n'`. Do not share it or commit it.
 
+Payment replay and automated tests work without a GPU or model download. The local assistant and listing classifier require the model runtime. Restart the server after changing credentials or inference configuration.
+
 The UI works through native HTML forms without JavaScript. The optional Rust/WASM module adds live event-driven refresh and deadline countdowns. JavaScript files are WASM loading/binding glue only.
 
 ### Live Sandbox
