@@ -15,6 +15,12 @@ fn elastic_headers() -> Result<reqwest::header::HeaderMap> {
 }
 pub async fn catalog(app: &App, query: &str) -> Result<Value> {
     if app.config.inference.private {
+        let mirrored = crate::catalog_cache::search(&app.pool, query).await?;
+        if !mirrored.is_empty() {
+            return Ok(
+                json!({"source":"Channel3 local mirror","items":mirrored,"private_inference":true,"notice":"Local screened snapshot. No user search query was sent to Channel3. Imported items are discovery-only."}),
+            );
+        }
         let text = "Invoice validation artifact. A deterministic USD 1.00 JSON invoice fixture for testing delivery verification.";
         let matches = query
             .split_whitespace()
@@ -126,7 +132,7 @@ pub async fn prepare_elastic(app: &App) -> Result<()> {
     }
     Ok(())
 }
-async fn screen(app: &App, text: &str) -> Result<bool> {
+pub(crate) async fn screen(app: &App, text: &str) -> Result<bool> {
     let lower = text.to_lowercase();
     let heuristic = [
         "ignore previous",
@@ -172,7 +178,9 @@ async fn screen(app: &App, text: &str) -> Result<bool> {
 }
 pub async fn agent(app: &App, query: &str) -> Result<Value> {
     if app.config.inference.provider == crate::inference::Provider::Local {
-        return crate::inference::recommend(&app.config.inference, query).await;
+        let screened = crate::catalog_cache::context(&app.pool, query).await?;
+        let input = json!({"buyer_request":query,"screened_catalog":screened});
+        return crate::inference::recommend(&app.config.inference, &input.to_string()).await;
     }
     ensure!(
         !app.config.inference.private,

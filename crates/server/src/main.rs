@@ -1,3 +1,4 @@
+mod catalog_cache;
 mod config;
 mod db;
 mod inference;
@@ -414,6 +415,27 @@ async fn ui_agent(State(app): State<App>, h: HeaderMap, Form(q): Form<Search>) -
     db::event(&app.pool, None, "agent_recommendation", value).await?;
     Ok(Redirect::to("/"))
 }
+async fn catalog_sync(State(app): State<App>, h: HeaderMap) -> Api<Json<Value>> {
+    authenticated(&app, &h, true)?;
+    let result = catalog_cache::synchronize(&app).await?;
+    db::event(&app.pool, None, "catalog_import", result.clone()).await?;
+    Ok(Json(result))
+}
+async fn ui_catalog_sync(State(app): State<App>, h: HeaderMap) -> Api<Redirect> {
+    authenticated(&app, &h, true)?;
+    let result = match catalog_cache::synchronize(&app).await {
+        Ok(result) => result,
+        Err(error) => {
+            let mut target = reqwest::Url::parse("http://localhost/").unwrap();
+            target
+                .query_pairs_mut()
+                .append_pair("message", &error.to_string());
+            return Ok(Redirect::to(&format!("/?{}", target.query().unwrap_or(""))));
+        }
+    };
+    db::event(&app.pool, None, "catalog_import", result).await?;
+    Ok(Redirect::to("/"))
+}
 async fn ui_catalog(State(app): State<App>, h: HeaderMap, Form(q): Form<Search>) -> Api<Redirect> {
     authenticated(&app, &h, true)?;
     if q.query.len() > 200 {
@@ -532,6 +554,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/orders/{id}/authorize", post(authorize))
         .route("/api/orders/{id}/deliveries", post(deliver))
         .route("/api/catalog/search", get(catalog))
+        .route("/api/catalog/sync",post(catalog_sync))
         .route("/api/agent/runs", post(agent))
         .route("/api/events", get(events))
         .route("/api/webhooks/paypal", post(webhook))
@@ -541,6 +564,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/ui/orders/{id}/deliveries", post(ui_deliver))
         .route("/ui/agent", post(ui_agent))
         .route("/ui/catalog", post(ui_catalog))
+        .route("/ui/catalog/sync",post(ui_catalog_sync))
         .route("/paypal/return", get(|| async { Redirect::to("/") }))
         .layer(tower_http::set_header::SetResponseHeaderLayer::if_not_present(header::X_CONTENT_TYPE_OPTIONS, axum::http::HeaderValue::from_static("nosniff")))
         .layer(tower_http::set_header::SetResponseHeaderLayer::if_not_present(header::X_FRAME_OPTIONS, axum::http::HeaderValue::from_static("DENY")))

@@ -132,6 +132,15 @@
       }
     },
     {
+      "name": "Import public Channel3 catalog",
+      "request": {
+        "method": "POST",
+        "header": [],
+        "url": "{{base_url}}/api/catalog/sync",
+        "description": "Authenticated operator import using QP_CATALOG_SEED_QUERY. Requires CHANNEL3_API_KEY. Only this configured seed is sent externally; subsequent private searches use the local screened mirror. Imported listings are discovery-only."
+      }
+    },
+    {
       "name": "Private catalog search",
       "request": {
         "method": "GET",

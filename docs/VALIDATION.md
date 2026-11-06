@@ -24,7 +24,7 @@ Validated in the development workspace on 2026-11-05.
 ## Requires additional setup or manual verification
 
 - PayPal signed webhook delivery: requires public HTTPS endpoint and PAYPAL_WEBHOOK_ID registration.
-- Channel3 live search: requires CHANNEL3_API_KEY and an explicit opt-out of private catalog mode. Adapter follows the official v1 search endpoint but has not been exercised with a live key.
+- Channel3 live import: authenticated explicit seed import is implemented; requires `CHANNEL3_API_KEY`. The API contract and bounded mock response parser are tested. It has not been exercised against Channel3 because a live key is not configured. User searches remain local.
 - Docker builds and networkless verifier container: Docker is unavailable in this workspace. Local validation uses the trusted Rust JSON-verifier process.
 - Public deployment, video upload, and Devpost submission have not been performed.
 

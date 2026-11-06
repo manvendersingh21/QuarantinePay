@@ -344,6 +344,29 @@
           }
         }
       }
+    },
+    "/api/catalog/sync": {
+      "post": {
+        "summary": "Import a public catalog using the configured operator seed",
+        "operationId": "ImportChannel3Catalog",
+        "description": "Authenticated operator action. Sends QP_CATALOG_SEED_QUERY and CHANNEL3_API_KEY to Channel3. No buyer search is sent. Screened products are stored locally for private searches; they are discovery-only and cannot be checked out.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Import counts and screening results"
+          },
+          "400": {
+            "description": "Missing Channel3 key or unavailable integration"
+          },
+          "401": {
+            "description": "Authentication required"
+          }
+        }
+      }
     }
   },
   "components": {
