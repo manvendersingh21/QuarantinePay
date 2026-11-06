@@ -1,0 +1,187 @@
+1
+00:00:00,080 --> 00:00:01,901
+QuarantinePay makes agent-assisted
+purchases verifiable.
+
+2
+00:00:01,901 --> 00:00:04,451
+A buyer approves a signed purchase intent.
+
+3
+00:00:04,451 --> 00:00:06,272
+PayPal places an authorization hold.
+
+4
+00:00:06,272 --> 00:00:11,007
+Delivery checks then decide whether to
+capture the payment or void the hold.
+
+5
+00:00:11,007 --> 00:00:13,921
+Every step is visible in one command
+center.
+
+6
+00:00:14,081 --> 00:00:19,243
+This assistant runs Qwen three locally on
+our thirty-two gigabyte Tesla V one
+
+7
+00:00:19,243 --> 00:00:19,641
+hundred.
+
+8
+00:00:19,641 --> 00:00:22,817
+Prompts and product text stay on this
+server.
+
+9
+00:00:22,817 --> 00:00:27,186
+The model can recommend an invoice
+artifact, but receives no payment
+
+10
+00:00:27,186 --> 00:00:29,171
+credentials or authority to spend.
+
+11
+00:00:29,171 --> 00:00:31,951
+Private mode also searches our local
+catalog.
+
+12
+00:00:31,951 --> 00:00:35,922
+PayPal receives the approved payment
+fields required by its API.
+
+13
+00:00:36,082 --> 00:00:40,029
+Now we change the merchant identifier
+after the intent is signed.
+
+14
+00:00:40,029 --> 00:00:44,334
+The gateway rejects the altered intent
+before a PayPal order is created.
+
+15
+00:00:44,334 --> 00:00:47,922
+The recipient and amount remain bound to
+the buyer-approved intent.
+
+16
+00:00:48,082 --> 00:00:50,337
+First, the failing delivery.
+
+17
+00:00:50,337 --> 00:00:56,537
+QuarantinePay creates a PayPal Sandbox
+order and waits for buyer approval.
+
+18
+00:00:56,537 --> 00:01:00,483
+After approval, the server authorizes one
+dollar.
+
+19
+00:01:00,483 --> 00:01:02,738
+Capture waits for verification.
+
+20
+00:01:02,738 --> 00:01:07,247
+The invoice then fails its deterministic
+arithmetic check.
+
+21
+00:01:07,247 --> 00:01:13,448
+The worker requests a void using the
+stored authorization and request
+
+22
+00:01:13,448 --> 00:01:14,011
+identifier.
+
+23
+00:01:14,011 --> 00:01:21,339
+The red timeline and audit event appear
+only when PayPal confirms the void.
+
+24
+00:01:21,339 --> 00:01:25,849
+Signature checks, deadlines, and one-time
+nonces remain enforced.
+
+25
+00:01:25,849 --> 00:01:30,922
+The authorization hold provides a
+verification window before settlement.
+
+26
+00:01:31,082 --> 00:01:37,276
+For a valid delivery, the buyer again
+approves the signed transaction and
+
+27
+00:01:37,276 --> 00:01:39,340
+PayPal authorizes the hold.
+
+28
+00:01:39,340 --> 00:01:43,986
+This time, the invoice satisfies the
+agreed acceptance policy.
+
+29
+00:01:43,986 --> 00:01:49,663
+Quantities and prices produce the exact
+approved total, and the verifier
+
+30
+00:01:49,663 --> 00:01:51,728
+returns a passing result.
+
+31
+00:01:51,728 --> 00:01:55,857
+Only then does the worker capture the
+authorization.
+
+32
+00:01:55,857 --> 00:01:59,986
+The timeline turns green after PayPal
+confirms completion.
+
+33
+00:01:59,986 --> 00:02:04,115
+Durable operations, stable request
+identifiers, and provider-state checks
+
+34
+00:02:04,115 --> 00:02:06,696
+support safe recovery after interruptions.
+
+35
+00:02:06,696 --> 00:02:11,857
+We independently checked the recipient,
+amount, and final payment status
+
+36
+00:02:11,857 --> 00:02:13,922
+against PayPal's own API.
+
+37
+00:02:14,082 --> 00:02:17,092
+QuarantinePay joins local artificial
+intelligence, signed purchase intents,
+
+38
+00:02:17,092 --> 00:02:19,725
+deterministic delivery checks, and
+confirmed PayPal settlement.
+
+39
+00:02:19,725 --> 00:02:24,239
+It creates a visible, testable boundary
+between what an agent recommends and
+
+40
+00:02:24,239 --> 00:02:26,120
+what the buyer actually approves.
