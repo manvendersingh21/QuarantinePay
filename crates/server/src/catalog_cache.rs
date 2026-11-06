@@ -160,11 +160,18 @@ pub async fn synchronize(app: &App) -> Result<Value> {
 mod tests {
     use super::*;
     #[tokio::test]
-    async fn public_import_sends_only_the_explicit_seed() {
-        let router=axum::Router::new().route("/search",axum::routing::post(|axum::Json(body):axum::Json<Value>|async move{
-        assert_eq!(body,json!({"query":"developer tools","limit":8}));
-        axum::Json(json!({"data":[{"id":"one","title":"Developer keyboard","description":"Compact keyboard"}]}))
-    }));
+    async fn public_import_uses_channel3_http_auth_and_response_shape() {
+        async fn mock_search(
+            headers: axum::http::HeaderMap,
+            axum::Json(body): axum::Json<Value>,
+        ) -> axum::Json<Value> {
+            assert_eq!(headers.get("x-api-key").unwrap(), "fake-test-key");
+            assert_eq!(body, json!({"query":"developer tools","limit":8}));
+            axum::Json(
+                json!({"products":[{"id":"one","title":"Developer keyboard","description":"Compact keyboard"}],"next_page_token":null}),
+            )
+        }
+        let router = axum::Router::new().route("/search", axum::routing::post(mock_search));
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
         let task = tokio::spawn(async move {
