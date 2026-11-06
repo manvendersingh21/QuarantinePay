@@ -16,12 +16,11 @@ Source code, setup instructions, API collection, and validation notes: https://g
 
 Chapters
 0:00 Introduction
-0:14 Local AI and privacy boundary
-0:36 Signed intent red-team check
-0:48 Failed delivery and PayPal Sandbox void
-1:31 Verified delivery and PayPal Sandbox capture
-2:14 Summary
-2:26 Channel3 live import results
+0:16 Local AI and privacy boundary
+0:42 Signed intent red-team check
+0:56 Failed delivery and PayPal Sandbox void
+1:47 Verified delivery and PayPal Sandbox capture
+2:37 Channel3 live import results
 
 This video is a product demonstration, not financial advice or a claim that the system detects every prompt injection.
 
