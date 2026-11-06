@@ -185,3 +185,28 @@ between what an agent recommends and
 40
 00:02:24,239 --> 00:02:26,120
 what the buyer actually approves.
+
+41
+00:02:26,200 --> 00:02:29,300
+We also verified the live
+Channel3 path.
+
+42
+00:02:29,300 --> 00:02:32,010
+The fixed public seed returned
+eight listings.
+
+43
+00:02:32,010 --> 00:02:35,510
+All eight passed local screening,
+and none were withheld.
+
+44
+00:02:35,510 --> 00:02:39,010
+A follow-up search found five
+in our local mirror.
+
+45
+00:02:39,010 --> 00:02:43,430
+These listings are for discovery only
+and cannot change checkout.

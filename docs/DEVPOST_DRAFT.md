@@ -43,7 +43,7 @@ Rust, PayPal Sandbox, Qwen3-30B-A3B, Ollama, PostgreSQL, Ed25519, Axum, Tokio, L
 ## Public assets and testing
 
 - Repository: https://github.com/manvendersingh21/QuarantinePay
-- Demo video: **add the public YouTube URL after upload**. The current local recording is 146.2 seconds and predates the verified live Channel3 import; replace it with an updated recording before submitting for the Channel3 prize.
+- Demo video: **add the public YouTube URL after upload**. The updated local recording is 165.6 seconds and includes a proof slate from the verified live Channel3 import and local search. It summarizes the results but does not show the operator import UI interaction.
 - Setup and test steps: `README.md`
 - API requests: `docs/QuarantinePay.postman_collection.json`
 - API schema: `docs/openapi.json`
@@ -53,15 +53,14 @@ Rust, PayPal Sandbox, Qwen3-30B-A3B, Ollama, PostgreSQL, Ed25519, Axum, Tokio, L
 ## Track selection checklist
 
 - PayPal Grand Prize: the application uses PayPal Sandbox centrally and demonstrates buyer approval, authorization, and verified capture/void.
-- Best Use of Channel3: **live API import verified (8 listings screened and stored; 5 found in local search), but do not claim the prize until an updated public demo shows that flow.**
+- Best Use of Channel3: **live API import verified (8 listings screened and stored; 5 found in local search). The updated local demo shows a result slate, not the operator UI flow; publish it and review the track requirements before claiming this prize.**
 - AG Grid, APIMatic, Bryntum, and Render: not integrated; do not claim these sponsor prizes.
 - A project may win at most one sponsor prize, alongside a Grand Prize or an Honorable Mention. See the [official rules](https://paypalaihackathon.devpost.com/rules).
 
 ## Before submission
 
-1. Record a fresh video showing the verified Channel3 import and local-mirror search if entering its sponsor prize.
-2. Set the final YouTube video visibility to **Public** and confirm its duration is under three minutes.
-3. Replace the video URL placeholder and check every statement against the submitted build and recording.
-4. Submit via the project owner's Devpost account before the published deadline.
+1. Publish the updated 165.6-second recording publicly to YouTube and replace the video URL placeholder. The recording shows the verified Channel3 results slate; it does not show the operator UI interaction.
+2. Check every submission statement against the build and public recording.
+3. Submit via the project owner's Devpost account before the published deadline.
 
 The Git history shows the project was created on November 5, 2026, during the published submission period. Recheck the [official rules](https://paypalaihackathon.devpost.com/rules) before submitting in case they change.

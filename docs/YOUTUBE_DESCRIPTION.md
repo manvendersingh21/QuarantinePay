@@ -21,7 +21,8 @@ Chapters
 0:48 Failed delivery and PayPal Sandbox void
 1:31 Verified delivery and PayPal Sandbox capture
 2:14 Summary
+2:26 Channel3 live import results
 
 This video is a product demonstration, not financial advice or a claim that the system detects every prompt injection.
 
-**Before publishing:** This recording predates the verified live Channel3 catalog import (8 listings screened and stored; 5 found by local search). Do not claim Channel3 sponsor-track eligibility based on this video. Record an updated demonstration that shows the import and local search, then revise the video URL and chapters. Set YouTube visibility to **Public** for the PayPal AI Hackathon submission.
+**This recording includes a closing result slate from the verified live Channel3 import:** 8 listings received, screened, and stored; 0 withheld; 5 results returned from the local mirror. The slate summarizes the API result and does not show the operator UI interaction. Imported listings are discovery-only. Set YouTube visibility to **Public** for the PayPal AI Hackathon submission.
