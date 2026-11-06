@@ -1,0 +1,212 @@
+1
+00:00:00,094 --> 00:00:02,236
+QuarantinePay makes agent-assisted
+purchases verifiable.
+
+2
+00:00:02,236 --> 00:00:05,236
+A buyer approves a signed purchase intent.
+
+3
+00:00:05,236 --> 00:00:07,379
+PayPal places an authorization hold.
+
+4
+00:00:07,379 --> 00:00:12,949
+Delivery checks then decide whether to
+capture the payment or void the hold.
+
+5
+00:00:12,949 --> 00:00:16,378
+Every step is visible in one command
+center.
+
+6
+00:00:16,566 --> 00:00:22,639
+This assistant runs Qwen three locally on
+our thirty-two gigabyte Tesla V one
+
+7
+00:00:22,639 --> 00:00:23,107
+hundred.
+
+8
+00:00:23,107 --> 00:00:26,844
+Prompts and product text stay on this
+server.
+
+9
+00:00:26,844 --> 00:00:31,984
+The model can recommend an invoice
+artifact, but receives no payment
+
+10
+00:00:31,984 --> 00:00:34,319
+credentials or authority to spend.
+
+11
+00:00:34,319 --> 00:00:37,589
+Private mode also searches our local
+catalog.
+
+12
+00:00:37,589 --> 00:00:42,261
+PayPal receives the approved payment
+fields required by its API.
+
+13
+00:00:42,449 --> 00:00:47,093
+Now we change the merchant identifier
+after the intent is signed.
+
+14
+00:00:47,093 --> 00:00:52,158
+The gateway rejects the altered intent
+before a PayPal order is created.
+
+15
+00:00:52,158 --> 00:00:56,379
+The recipient and amount remain bound to
+the buyer-approved intent.
+
+16
+00:00:56,567 --> 00:00:59,220
+First, the failing delivery.
+
+17
+00:00:59,220 --> 00:01:06,514
+QuarantinePay creates a PayPal Sandbox
+order and waits for buyer approval.
+
+18
+00:01:06,514 --> 00:01:11,156
+After approval, the server authorizes one
+dollar.
+
+19
+00:01:11,156 --> 00:01:13,809
+Capture waits for verification.
+
+20
+00:01:13,809 --> 00:01:19,114
+The invoice then fails its deterministic
+arithmetic check.
+
+21
+00:01:19,114 --> 00:01:26,409
+The worker requests a void using the
+stored authorization and request
+
+22
+00:01:26,409 --> 00:01:27,072
+identifier.
+
+23
+00:01:27,072 --> 00:01:35,693
+The red timeline and audit event appear
+only when PayPal confirms the void.
+
+24
+00:01:35,693 --> 00:01:40,999
+Signature checks, deadlines, and one-time
+nonces remain enforced.
+
+25
+00:01:40,999 --> 00:01:46,967
+The authorization hold provides a
+verification window before settlement.
+
+26
+00:01:47,155 --> 00:01:54,442
+For a valid delivery, the buyer again
+approves the signed transaction and
+
+27
+00:01:54,442 --> 00:01:56,871
+PayPal authorizes the hold.
+
+28
+00:01:56,871 --> 00:02:02,336
+This time, the invoice satisfies the
+agreed acceptance policy.
+
+29
+00:02:02,336 --> 00:02:09,015
+Quantities and prices produce the exact
+approved total, and the verifier
+
+30
+00:02:09,015 --> 00:02:11,445
+returns a passing result.
+
+31
+00:02:11,445 --> 00:02:16,302
+Only then does the worker capture the
+authorization.
+
+32
+00:02:16,302 --> 00:02:21,160
+The timeline turns green after PayPal
+confirms completion.
+
+33
+00:02:21,160 --> 00:02:26,018
+Durable operations, stable request
+identifiers, and provider-state checks
+
+34
+00:02:26,018 --> 00:02:29,054
+support safe recovery after interruptions.
+
+35
+00:02:29,054 --> 00:02:35,126
+We independently checked the recipient,
+amount, and final payment status
+
+36
+00:02:35,126 --> 00:02:37,555
+against PayPal's own API.
+
+37
+00:02:37,744 --> 00:02:41,285
+QuarantinePay joins local artificial
+intelligence, signed purchase intents,
+
+38
+00:02:41,285 --> 00:02:44,382
+deterministic delivery checks, and
+confirmed PayPal settlement.
+
+39
+00:02:44,382 --> 00:02:49,693
+It creates a visible, testable boundary
+between what an agent recommends and
+
+40
+00:02:49,693 --> 00:02:51,906
+what the buyer actually approves.
+
+41
+00:02:52,000 --> 00:02:55,647
+We also verified the live
+Channel3 path.
+
+42
+00:02:55,647 --> 00:02:58,835
+The fixed public seed returned
+eight listings.
+
+43
+00:02:58,835 --> 00:03:02,953
+All eight passed local screening,
+and none were withheld.
+
+44
+00:03:02,953 --> 00:03:07,071
+A follow-up search found five
+in our local mirror.
+
+45
+00:03:07,071 --> 00:03:12,271
+These listings are for discovery only
+and cannot change checkout.

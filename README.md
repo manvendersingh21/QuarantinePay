@@ -4,6 +4,8 @@
 
 ![QuarantinePay command center](docs/dashboard.png)
 
+Watch the [2:59 submission demo](demo/quarantinepay-contest.mp4) or the [full 3:15 version](demo/quarantinepay-full.mp4).
+
 ## Run locally
 
 Requires stable Rust, PostgreSQL 16+, and (for the live browser timeline) `wasm32-unknown-unknown` plus `wasm-bindgen-cli` matching the lockfile, currently 0.2.130.

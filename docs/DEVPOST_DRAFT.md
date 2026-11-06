@@ -43,7 +43,7 @@ Rust, PayPal Sandbox, Qwen3-30B-A3B, Ollama, PostgreSQL, Ed25519, Axum, Tokio, L
 ## Public assets and testing
 
 - Repository: https://github.com/manvendersingh21/QuarantinePay
-- Demo video: **add the public YouTube URL after upload**. The updated local recording is 178.7 seconds and includes a proof slate from the verified live Channel3 import and local search. It summarizes the results but does not show the operator import UI interaction.
+- Demo video: **add the public YouTube URL after upload**. The [submission recording](../demo/quarantinepay-contest.mp4) is 178.7 seconds and includes a proof slate from the verified live Channel3 import and local search. It summarizes the results but does not show the operator import UI interaction.
 - Setup and test steps: `README.md`
 - API requests: `docs/QuarantinePay.postman_collection.json`
 - API schema: `docs/openapi.json`
