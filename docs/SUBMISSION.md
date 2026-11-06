@@ -31,8 +31,10 @@ The example delivery is a bounded JSON invoice fixture checked against a signed 
 
 ## Track eligibility
 
-The current verified integration supports the main PayPal project submission. Channel3 is implemented as an explicit external-discovery option but requires a live key and actual usage before claiming that sponsor track. AG Grid/AG Studio, Bryntum, and APIMatic's TypeScript SDK are excluded by the strict Rust application requirement; do not claim those integrations. Verify the current official rules before selecting categories.
+The target is the PayPal Grand Prize plus **Best Use of Channel3**, contingent on a live API import and a demo showing that integration. The official rules permit a project to win at most one Grand Prize plus one Sponsor Prize, or one Honorable Mention plus one Sponsor Prize; winning every sponsor track is not possible. Do not claim Channel3 eligibility until a real import is exercised. AG Grid/AG Studio, Bryntum, APIMatic, and Render are not integrated, so do not claim those sponsor prizes. Sponsor tools are optional for the main PayPal submission.
+
+The official submission deadline is **November 12, 2026 at 12:00 p.m. Pacific Time**. Required materials include a working demo, public open-source repository with a license, and a demonstration video under three minutes that is publicly visible on YouTube. An unlisted YouTube video does not meet the published visibility requirement. Confirm the [current official rules](https://paypalaihackathon.devpost.com/rules) before submitting, since Devpost says the rules can change.
 
 ## Publication checklist
 
-Review the finished video for credentials and personal information; keep it under three minutes. Provide the repository access required by the contest, upload the reviewed video as unlisted, then submit through the project owner's Devpost account. Public repository visibility, YouTube upload, and Devpost publication are release steps separate from the local application build.
+Review the finished video for credentials, personal information, and third-party copyrighted material; keep it under three minutes. Upload the reviewed video as **public** on YouTube, then provide its link with the public repository and working-demo instructions in the Devpost submission. Public repository visibility, YouTube upload, and Devpost publication are release steps separate from the local application build.
