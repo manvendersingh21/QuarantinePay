@@ -29,6 +29,7 @@ The example delivery is a bounded JSON invoice fixture checked against a signed 
 - `docs/PRIVACY.md`: data destinations and enforced local-inference defaults.
 - `docs/DEMO.md`: demo outline and publication notes.
 - `docs/YOUTUBE_DESCRIPTION.md`, `docs/quarantinepay-demo.en.srt`, and `docs/quarantinepay-thumbnail.png`: upload description draft, English captions, and thumbnail for the local recording.
+- `docs/DEVPOST_DRAFT.md`: entry text and a truthful prize eligibility checklist.
 
 ## Track eligibility
 
