@@ -18,7 +18,7 @@ Validated in the development workspace on 2026-11-06.
 - Elasticsearch 9.5.6 installed with its official SHA-512 checksum verified, running as an unprivileged service on 127.0.0.1:19200. The three-document attack index was created and live vector queries executed during private catalog search.
 - Local Qwen3-30B-A3B Instruct downloaded and successfully queried through the Rust API. Ollama reports a 19.4 GB loaded footprint entirely on the Tesla V100 GPU with an 8,192-token context.
 - Private local catalog lookup returned a screened product. The local Ollama server rejected a cloud-model request with HTTP 403 and “ollama cloud is disabled.” Unit tests reject remote model routes, cloud model tags, cloud/private provider combinations, and redirect-based prompt forwarding.
-- The explicit Channel3 import UI was exercised without a configured key and reports that the key is needed. The private search route and fixed-seed import use separate requests.
+- Live Channel3 import verified on 2026-11-06 using the configured fixed public seed: HTTP 200, 8 received, 8 screened and stored, 0 withheld. A subsequent authenticated search returned 5 results from the local PostgreSQL mirror; every result was marked discovery-only. User search text was not sent to Channel3. Elasticsearch was unavailable during this import, so optional vector screening was disabled for this run; the configured local Qwen model performed listing screening.
 - GitHub Actions passed on the catalog-mirror commit, including native build, workspace tests, payment lifecycle, permission handling, PostgreSQL mirror search, and WASM compilation: [run 42149837884](https://github.com/manvendersingh21/QuarantinePay/actions/runs/42149837884).
 - Local mock-provider regression tests cover HTTP 401/403 versus 429/500 classification, safe error details, stable request headers, and preservation of PENDING capture status during idempotent reconciliation. An isolated PostgreSQL test proves permission refusals stop after one attempt while preserving the authorization/request ID, and expired intents cannot start new monetary effects.
 - Real Meta model listing and live recommendation: HTTP 200. Model recommendation carries no payment authority.
@@ -26,7 +26,7 @@ Validated in the development workspace on 2026-11-06.
 ## Requires additional setup or manual verification
 
 - PayPal signed webhook delivery: requires public HTTPS endpoint and PAYPAL_WEBHOOK_ID registration.
-- Channel3 live import: authenticated explicit seed import is implemented; requires `CHANNEL3_API_KEY`. The API contract and bounded mock response parser are tested. It has not been exercised against Channel3 because a live key is not configured. User searches remain local.
+- Channel3 live import is verified as described above. To claim the sponsor track in the submission, update the public demo to show the import and local-mirror search. User searches remain local.
 - Docker builds and networkless verifier container: Docker is unavailable in this workspace. Local validation uses the trusted Rust JSON-verifier process.
 - Public YouTube upload and Devpost submission have not been performed. The official rules require a publicly visible YouTube video under three minutes and cap wins at one Sponsor Prize per project; see the [official rules](https://paypalaihackathon.devpost.com/rules).
 

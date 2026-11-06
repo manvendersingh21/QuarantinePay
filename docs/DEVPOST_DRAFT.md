@@ -20,7 +20,7 @@ Agent recommendations and payment authority should not share the same trust boun
 
 QuarantinePay is a Rust payment gateway that binds a buyer, allowlisted product, merchant, amount, currency, expiration, and acceptance policy into an Ed25519-signed intent. A recommendation model cannot change those fields or call payment operations. After the buyer approves the PayPal Sandbox order, the backend authorizes it and places the digital delivery in quarantine. A bounded Rust verifier checks the submitted JSON invoice against the signed deterministic policy. Passing delivery queues capture; a failed check or deadline queues void. The worker persists idempotency identifiers and verifies the final state with PayPal before recording settlement.
 
-The demo shows a merchant-substitution attempt rejected before order creation, a failing invoice followed by a PayPal-confirmed void, and a passing invoice followed by a PayPal-confirmed capture. The assistant runs Qwen3-30B-A3B locally on a Tesla V100 GPU and has no payment tools or credentials. User prompts and delivery verification stay on the application host; PayPal receives the approved payment fields required to process the transaction. All payment activity in the demo is Sandbox activity. An authorization hold is not escrow, and the prototype verifies only the bounded invoice fixture rather than arbitrary software or physical delivery.
+The demo shows a merchant-substitution attempt rejected before order creation, a failing invoice followed by a PayPal-confirmed void, and a passing invoice followed by a PayPal-confirmed capture. The assistant runs Qwen3-30B-A3B locally on a Tesla V100 GPU and has no payment tools or credentials. An operator can import a fixed public catalog seed from Channel3; returned listings are screened locally and stored in a PostgreSQL mirror, while buyer searches stay local. The live import returned eight listings, all eight passed screening, and a follow-up local search found five. Imported listings are discovery-only and cannot alter checkout. User prompts and delivery verification stay on the application host; PayPal receives the approved payment fields required to process the transaction. All payment activity in the demo is Sandbox activity. An authorization hold is not escrow, and the prototype verifies only the bounded invoice fixture rather than arbitrary software or physical delivery.
 
 ## How we built it
 
@@ -43,7 +43,7 @@ Rust, PayPal Sandbox, Qwen3-30B-A3B, Ollama, PostgreSQL, Ed25519, Axum, Tokio, L
 ## Public assets and testing
 
 - Repository: https://github.com/manvendersingh21/QuarantinePay
-- Demo video: **add the public YouTube URL after upload**. The current local recording is 146.2 seconds and predates a live Channel3 import.
+- Demo video: **add the public YouTube URL after upload**. The current local recording is 146.2 seconds and predates the verified live Channel3 import; replace it with an updated recording before submitting for the Channel3 prize.
 - Setup and test steps: `README.md`
 - API requests: `docs/QuarantinePay.postman_collection.json`
 - API schema: `docs/openapi.json`
@@ -53,13 +53,13 @@ Rust, PayPal Sandbox, Qwen3-30B-A3B, Ollama, PostgreSQL, Ed25519, Axum, Tokio, L
 ## Track selection checklist
 
 - PayPal Grand Prize: the application uses PayPal Sandbox centrally and demonstrates buyer approval, authorization, and verified capture/void.
-- Best Use of Channel3: **do not select or claim until a live API import has been verified and shown in an updated public demo.** The adapter is implemented; the live key is not configured.
+- Best Use of Channel3: **live API import verified (8 listings screened and stored; 5 found in local search), but do not claim the prize until an updated public demo shows that flow.**
 - AG Grid, APIMatic, Bryntum, and Render: not integrated; do not claim these sponsor prizes.
 - A project may win at most one sponsor prize, alongside a Grand Prize or an Honorable Mention. See the [official rules](https://paypalaihackathon.devpost.com/rules).
 
 ## Before submission
 
-1. Add `CHANNEL3_API_KEY` to the ignored local `.env`, run a real explicit-seed import, inspect the screened local results, and record a fresh video if entering the Channel3 sponsor prize.
+1. Record a fresh video showing the verified Channel3 import and local-mirror search if entering its sponsor prize.
 2. Set the final YouTube video visibility to **Public** and confirm its duration is under three minutes.
 3. Replace the video URL placeholder and check every statement against the submitted build and recording.
 4. Submit via the project owner's Devpost account before the published deadline.

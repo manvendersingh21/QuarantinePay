@@ -24,4 +24,4 @@ Chapters
 
 This video is a product demonstration, not financial advice or a claim that the system detects every prompt injection.
 
-**Before publishing:** This recording predates the live Channel3 catalog import. Do not claim Channel3 sponsor-track eligibility based on this video. If a live Channel3 import is subsequently verified and shown, record an updated demonstration and revise this description. Set YouTube visibility to **Public** for the PayPal AI Hackathon submission.
+**Before publishing:** This recording predates the verified live Channel3 catalog import (8 listings screened and stored; 5 found by local search). Do not claim Channel3 sponsor-track eligibility based on this video. Record an updated demonstration that shows the import and local search, then revise the video URL and chapters. Set YouTube visibility to **Public** for the PayPal AI Hackathon submission.
