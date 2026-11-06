@@ -1,193 +1,177 @@
 1
-00:00:00,094 --> 00:00:02,236
-QuarantinePay makes agent-assisted
-purchases verifiable.
+00:00:00,050 --> 00:00:04,446
+QuarantinePay makes agent purchases
+verifiable.
 
 2
-00:00:02,236 --> 00:00:05,236
-A buyer approves a signed purchase intent.
+00:00:04,446 --> 00:00:06,889
+Buyers approve a signed intent.
 
 3
-00:00:05,236 --> 00:00:07,379
-PayPal places an authorization hold.
+00:00:06,889 --> 00:00:13,068
+PayPal authorizes a hold while delivery
+checks decide whether to capture or void.
 
 4
-00:00:07,379 --> 00:00:12,949
-Delivery checks then decide whether to
-capture the payment or void the hold.
-
-5
-00:00:12,949 --> 00:00:16,378
-Every step is visible in one command
-center.
-
-6
-00:00:16,566 --> 00:00:22,639
+00:00:16,520 --> 00:00:22,278
 This assistant runs Qwen three locally on
 our thirty-two gigabyte Tesla V one
 
-7
-00:00:22,639 --> 00:00:23,107
+5
+00:00:22,278 --> 00:00:22,876
 hundred.
 
-8
-00:00:23,107 --> 00:00:26,844
+6
+00:00:22,876 --> 00:00:26,114
 Prompts and product text stay on this
 server.
 
-9
-00:00:26,844 --> 00:00:31,984
+7
+00:00:26,114 --> 00:00:31,077
 The model can recommend an invoice
 artifact, but receives no payment
 
-10
-00:00:31,984 --> 00:00:34,319
+8
+00:00:31,077 --> 00:00:33,558
 credentials or authority to spend.
 
-11
-00:00:34,319 --> 00:00:37,589
+9
+00:00:33,558 --> 00:00:36,910
 Private mode also searches our local
 catalog.
 
-12
-00:00:37,589 --> 00:00:42,261
+10
+00:00:36,910 --> 00:00:41,640
 PayPal receives the approved payment
 fields required by its API.
 
-13
-00:00:42,449 --> 00:00:47,093
-Now we change the merchant identifier
-after the intent is signed.
+11
+00:00:42,400 --> 00:00:45,148
+We change the merchant after signing.
 
-14
-00:00:47,093 --> 00:00:52,158
+12
+00:00:45,148 --> 00:00:50,432
 The gateway rejects the altered intent
-before a PayPal order is created.
+before any PayPal order is created.
 
-15
-00:00:52,158 --> 00:00:56,379
-The recipient and amount remain bound to
-the buyer-approved intent.
-
-16
-00:00:56,567 --> 00:00:59,220
+13
+00:00:56,520 --> 00:00:59,048
 First, the failing delivery.
 
-17
-00:00:59,220 --> 00:01:06,514
+14
+00:00:59,048 --> 00:01:05,454
 QuarantinePay creates a PayPal Sandbox
 order and waits for buyer approval.
 
-18
-00:01:06,514 --> 00:01:11,156
+15
+00:01:05,454 --> 00:01:09,891
 After approval, the server authorizes one
 dollar.
 
-19
-00:01:11,156 --> 00:01:13,809
+16
+00:01:09,891 --> 00:01:12,751
 Capture waits for verification.
 
-20
-00:01:13,809 --> 00:01:19,114
+17
+00:01:12,751 --> 00:01:17,079
 The invoice then fails its deterministic
 arithmetic check.
 
-21
-00:01:19,114 --> 00:01:26,409
+18
+00:01:17,079 --> 00:01:22,591
 The worker requests a void using the
 stored authorization and request
 
-22
-00:01:26,409 --> 00:01:27,072
+19
+00:01:22,591 --> 00:01:23,470
 identifier.
 
-23
-00:01:27,072 --> 00:01:35,693
+20
+00:01:23,470 --> 00:01:29,548
 The red timeline and audit event appear
 only when PayPal confirms the void.
 
-24
-00:01:35,693 --> 00:01:40,999
+21
+00:01:29,548 --> 00:01:35,235
 Signature checks, deadlines, and one-time
 nonces remain enforced.
 
-25
-00:01:40,999 --> 00:01:46,967
+22
+00:01:35,235 --> 00:01:40,766
 The authorization hold provides a
 verification window before settlement.
 
-26
-00:01:47,155 --> 00:01:54,442
+23
+00:01:47,110 --> 00:01:53,820
 For a valid delivery, the buyer again
-approves the signed transaction and
+approves the signed transaction and PayPal
 
-27
-00:01:54,442 --> 00:01:56,871
-PayPal authorizes the hold.
+24
+00:01:53,820 --> 00:01:55,497
+authorizes the hold.
 
-28
-00:01:56,871 --> 00:02:02,336
+25
+00:01:55,497 --> 00:02:00,950
 This time, the invoice satisfies the
 agreed acceptance policy.
 
-29
-00:02:02,336 --> 00:02:09,015
+26
+00:02:00,950 --> 00:02:08,059
 Quantities and prices produce the exact
-approved total, and the verifier
+approved total, and the verifier returns a
 
-30
-00:02:09,015 --> 00:02:11,445
-returns a passing result.
+27
+00:02:08,059 --> 00:02:09,360
+passing result.
 
-31
-00:02:11,445 --> 00:02:16,302
+28
+00:02:09,360 --> 00:02:12,966
 Only then does the worker capture the
 authorization.
 
-32
-00:02:16,302 --> 00:02:21,160
+29
+00:02:12,966 --> 00:02:17,372
 The timeline turns green after PayPal
 confirms completion.
 
-33
-00:02:21,160 --> 00:02:26,018
+30
+00:02:17,372 --> 00:02:23,214
 Durable operations, stable request
 identifiers, and provider-state checks
 
-34
-00:02:26,018 --> 00:02:29,054
+31
+00:02:23,214 --> 00:02:26,575
 support safe recovery after interruptions.
 
-35
-00:02:29,054 --> 00:02:35,126
+32
+00:02:26,575 --> 00:02:33,122
 We independently checked the recipient,
-amount, and final payment status
+amount, and final payment status against
+
+33
+00:02:33,122 --> 00:02:34,513
+PayPal's own API.
+
+34
+00:02:37,700 --> 00:02:41,400
+We also verified the live Channel3 path.
+
+35
+00:02:41,400 --> 00:02:44,766
+The fixed public seed returned eight
+listings.
 
 36
-00:02:35,126 --> 00:02:37,555
-against PayPal's own API.
+00:02:44,766 --> 00:02:48,729
+All eight passed local screening, and none
+were withheld.
 
 37
-00:02:37,650 --> 00:02:41,297
-We also verified the live
-Channel3 path.
+00:02:48,729 --> 00:02:52,124
+A follow-up search found five in our local
+mirror.
 
 38
-00:02:41,297 --> 00:02:44,485
-The fixed public seed returned
-eight listings.
-
-39
-00:02:44,485 --> 00:02:48,603
-All eight passed local screening,
-and none were withheld.
-
-40
-00:02:48,603 --> 00:02:52,721
-A follow-up search found five
-in our local mirror.
-
-41
-00:02:52,721 --> 00:02:57,921
-These listings are for discovery only
-and cannot change checkout.
+00:02:52,124 --> 00:02:56,769
+These listings are for discovery only and
+cannot change checkout.

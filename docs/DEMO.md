@@ -18,3 +18,5 @@ The submission recording is [`demo/quarantinepay-contest.mp4`](../demo/quarantin
 The [description draft](YOUTUBE_DESCRIPTION.md), English [caption file](quarantinepay-demo.en.srt), and white-background [thumbnail PNG](quarantinepay-thumbnail.png) with its editable [SVG source](quarantinepay-thumbnail.svg) are checked in. The captions cover the 178.7-second recording and were validated against the narration for exact text, monotonic timestamps, and YouTube's two-line caption layout.
 
 The full version is available at [`demo/quarantinepay-full.mp4`](../demo/quarantinepay-full.mp4) (194.8 seconds), with [matching captions](../demo/quarantinepay-full.en.srt). The contest version uses the same slower pace and omits the repeated closing summary to remain under three minutes.
+
+The videos use Microsoft Ava neural narration generated from the public demo script through Microsoft’s online speech service. This is separate from the application’s locally hosted inference.

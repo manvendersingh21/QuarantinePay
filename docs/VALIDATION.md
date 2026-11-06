@@ -5,7 +5,7 @@ Validated in the development workspace on 2026-11-06.
 ## Completed
 
 - Native Cargo workspace build and Rust/WASM browser build; generated WebAssembly bindings.
-- Updated narrated MP4 demo verified at 178.7 seconds with H.264/AAC. The closing proof slate shows the live Channel3 import and local-search counts; representative frames were inspected and credential screens are excluded.
+- Updated MP4 demo with Microsoft Ava neural narration verified at 178.7 seconds with H.264/AAC. The audio track was decoded and checked for speech-level signal in every section. The closing proof slate shows the live Channel3 import and local-search counts; representative frames were inspected and credential screens are excluded.
 - Formatting and Clippy with warnings denied.
 - Three core tests covering every signed field, buyer/expiry checks, deterministic invoice acceptance, unknown fields, and integer overflow.
 - PostgreSQL integration scenario in an isolated schema: altered merchant rejection, consumed-intent replay rejection, passing delivery/capture, failing delivery/void, expiry/void, restart recovery, valid and expired browser sessions, and cross-origin mutation rejection.
