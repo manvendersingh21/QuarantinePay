@@ -111,7 +111,9 @@ Set `QP_MODE=sandbox`, `PAYPAL_CLIENT_ID`, `PAYPAL_CLIENT_SECRET` and `PAYPAL_ME
 
 ## The 3-minute demo
 
-**Watch:** [`demo/quarantinepay-agent-demo.mp4`](demo/quarantinepay-agent-demo.mp4) (2:22, narrated, English captions in [`demo/quarantinepay-agent-demo.en.srt`](demo/quarantinepay-agent-demo.en.srt)). The video was recorded on live PayPal Sandbox with the local Qwen3 model on 2026-11-09, and every payment state in it is provider-confirmed. The two Sandbox purchases appear in the video; waits for the model and for PayPal approval are cut, and the AI voice-over is generated. Full storyboard and pre-flight checklist: [docs/DEMO.md](docs/DEMO.md).
+**Watch the autonomous agent:** [`demo/quarantinepay-autonomous-demo.mp4`](demo/quarantinepay-autonomous-demo.mp4) (2:16, narrated, captions in [`demo/quarantinepay-autonomous-demo.en.srt`](demo/quarantinepay-autonomous-demo.en.srt)). The buyer signs one spending mandate, and the agent then buys with no approval clicks. A clean delivery is auto-captured, and an injected one is escalated and voided. Recorded on live PayPal Sandbox: verification hold `0CD71975DN745830W` VOIDED, capture `4M512246EX858693T` COMPLETED, injected `7UV96267LR272553S` VOIDED.
+
+**Watch the manual-approval flow:** [`demo/quarantinepay-agent-demo.mp4`](demo/quarantinepay-agent-demo.mp4) (2:22, narrated, English captions in [`demo/quarantinepay-agent-demo.en.srt`](demo/quarantinepay-agent-demo.en.srt)). The video was recorded on live PayPal Sandbox with the local Qwen3 model on 2026-11-09, and every payment state in it is provider-confirmed. The two Sandbox purchases appear in the video; waits for the model and for PayPal approval are cut, and the AI voice-over is generated. Full storyboard and pre-flight checklist: [docs/DEMO.md](docs/DEMO.md).
 
 1. `/agent`: paste the request above and watch planning and the negotiation transcript. Alder declines the scope, and the two remaining sellers settle within budget.
 2. Inspect the contract and its digest, then **approve the contract**.

@@ -25,6 +25,13 @@ An earlier API-driven run the same day also confirmed the same paths: order `3AP
 - **Timing:** the whole run took 98 s.
 - **Automated coverage:** the `mandate_flow` PostgreSQL test covers an inactive mandate, single-mandate enforcement, autonomous authorization and auto-capture, escalation of an injected delivery despite a fooled model, budget exhaustion falling back to manual approval, a tampered stored mandate failing its signature check, revocation, and unchanged manual tasks.
 
+**Autonomous demo video** (`demo/quarantinepay-autonomous-demo.mp4`, 2:16), recorded live through the public tunnel URL:
+- Mandate `2b36c16e-…`: its verification hold `0CD71975DN745830W` is **VOIDED**.
+- Autonomous clean purchase: authorization `2JX12921NT823720L` **CAPTURED**, capture `4M512246EX858693T` **COMPLETED** (USD 47.25).
+- Autonomous injected purchase: `7UV96267LR272553S` **VOIDED**.
+
+All were confirmed by fresh PayPal API reads.
+
 **Live 403 permission refusal on the void path.** A second Sandbox business account (a distinct 13-character merchant) was configured as the payee on an isolated instance, while the REST app of the primary account made the API calls. This is the configuration behind this project's original void blocker. The agent order was approved at PayPal and authorized (authorization `4VW92416K3021363U`, USD 48.60), structurally passed, and was rejected by the buyer. PayPal refused the void with a real **`403 NOT_AUTHORIZED / PERMISSION_DENIED`** (debug ID `f612180644102`). QuarantinePay recorded `provider_permission_required`, moved the order to `reconciliation_required`, and kept the authorization ID, the `void` operation and its request ID. A fresh PayPal read shows the authorization still `CREATED`, so no void was claimed. It expires 2026-12-08, or the payee merchant can void it from its own Sandbox dashboard. The isolated schema was dropped.
 
 **Dockerfile-equivalent build.** Container builds cannot run on this host: podman is installed, but the sandbox forbids the mounts needed to apply image layers. The Dockerfile's steps were replicated natively instead:

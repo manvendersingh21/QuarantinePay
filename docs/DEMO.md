@@ -58,3 +58,17 @@ Optional alternate shot if time allows (it does not fit in 2:55): on another tas
 ## Rehearse or reproduce automatically
 
 `scripts/sandbox-demo.cjs` drives the same two stories through the agent console in headless Chromium, approving at PayPal as the Sandbox test buyer, and writes screenshots plus an `evidence.json` with the provider IDs. On 2026-11-09 it completed both stories in 167 seconds against live PayPal Sandbox with the local model (see `docs/VALIDATION.md`). Delivery windows are 12 minutes for Quillfire Analytics, 10 for Northstar and 8 for Alder, so a narrated run has room.
+
+## Autonomous storyboard (recommended submission video, 2:16)
+
+`demo/quarantinepay-autonomous-demo.mp4` was recorded on live PayPal Sandbox with `scripts/record-demo.cjs`-style per-shot capture (waits are cut; voice-over is synthesized).
+
+1. **0:00–0:28 Sign a spending mandate.** On `/agent`, sign the default mandate: USD 60 per purchase, USD 150 total, 24 h, auto-capture clean deliveries only.
+2. **0:28–0:40 Activate it.** Approve once at PayPal, where the consent screen says "Save PayPal for payments to Test Store". Click **I approved — activate mandate**. The USD 1.00 verification hold is voided immediately.
+3. **0:40–1:17 First purchase.** Type the request with *Buy autonomously under my mandate* checked, then click **Run buyer agent**.
+   - Planning and negotiation run as usual.
+   - **Buyer approval** shows "Approved by your mandate" with the rule checklist.
+   - **PayPal authorization** shows "Saved wallet · no click".
+   - Seller simulator: **Deliver compliant report**. The checks pass, the analyst rates it low risk, and the result is **Captured automatically**.
+4. **1:17–1:52 Second purchase.** **Deliver report with injected instructions**. A policy hold escalates the purchase to the buyer. Click **Reject delivery & void hold**, and the order is **VOIDED**.
+5. **1:52–2:16 Close.** The mandate card shows the budget committed, and `/intelligence` lists every hold, capture and void.
