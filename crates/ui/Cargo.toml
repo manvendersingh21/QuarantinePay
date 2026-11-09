@@ -6,3 +6,5 @@ license.workspace = true
 [dependencies]
 leptos = { version = "0.8", features = ["ssr"] }
 serde_json.workspace = true
+
+quarantinepay-core = { path = "../core" }

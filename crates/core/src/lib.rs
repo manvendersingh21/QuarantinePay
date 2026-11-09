@@ -3,6 +3,10 @@ use ed25519_dalek::{Signature, Signer, SigningKey, VerifyingKey};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
+mod scenarios;
+pub use scenarios::{
+    Scenario, ScenarioTerms, scenario, scenario_fixture, scenarios, verify_scenario,
+};
 
 pub const POLICY: &str =
     "invoice-v1:USD:total=sum(lines.quantity*lines.unit_price_minor):positive:bounded";
@@ -22,6 +26,8 @@ pub struct Intent {
     pub currency: String,
     pub expires_at: i64,
     pub policy_digest: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scenario: Option<ScenarioTerms>,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -38,15 +44,31 @@ impl SignedIntent {
         ensure!(self.intent.version == 1, "unsupported intent version");
         ensure!(self.intent.buyer == buyer, "buyer mismatch");
         ensure!(self.intent.expires_at > now, "expired intent");
-        ensure!(self.intent.sku == "invoice-fixture-v1", "unsupported SKU");
-        ensure!(
-            self.intent.currency == "USD" && self.intent.amount_minor == 100,
-            "price mismatch"
-        );
-        ensure!(
-            self.intent.policy_digest == policy_digest(),
-            "policy mismatch"
-        );
+        if let Some(terms) = &self.intent.scenario {
+            let offer =
+                scenario(&terms.id).ok_or_else(|| anyhow::anyhow!("unsupported scenario"))?;
+            ensure!(*terms == offer.signed_terms(), "scenario terms mismatch");
+            ensure!(
+                self.intent.sku == terms.id
+                    && self.intent.amount_minor == terms.amount_minor
+                    && self.intent.currency == "USD",
+                "scenario price or SKU mismatch"
+            );
+            ensure!(
+                self.intent.policy_digest == terms.digest(),
+                "scenario policy mismatch"
+            );
+        } else {
+            ensure!(self.intent.sku == "invoice-fixture-v1", "unsupported SKU");
+            ensure!(
+                self.intent.currency == "USD" && self.intent.amount_minor == 100,
+                "price mismatch"
+            );
+            ensure!(
+                self.intent.policy_digest == policy_digest(),
+                "policy mismatch"
+            );
+        }
         let bytes = hex::decode(&self.signature)?;
         key.verify_strict(
             &serde_json::to_vec(&self.intent)?,
@@ -136,6 +158,7 @@ mod tests {
             currency: "USD".into(),
             expires_at: 200,
             policy_digest: policy_digest(),
+            scenario: None,
         }
     }
     #[test]
@@ -169,6 +192,31 @@ mod tests {
         }
         assert!(signed.verify(&key.verifying_key(), "other", 100).is_err());
         assert!(signed.verify(&key.verifying_key(), "buyer", 200).is_err());
+    }
+    #[test]
+    fn scenario_terms_are_signed_and_catalog_bound() {
+        let key = SigningKey::from_bytes(&[9; 32]);
+        for offer in scenarios() {
+            let terms = offer.signed_terms();
+            let mut value = intent();
+            value.sku = offer.id.into();
+            value.policy_digest = terms.digest();
+            value.scenario = Some(terms);
+            let signed = SignedIntent::sign(value, &key).unwrap();
+            signed.verify(&key.verifying_key(), "buyer", 100).unwrap();
+            let mut altered = signed.clone();
+            altered
+                .intent
+                .scenario
+                .as_mut()
+                .unwrap()
+                .terms
+                .push_str(" changed");
+            assert!(altered.verify(&key.verifying_key(), "buyer", 100).is_err());
+            // A valid signature over substituted terms must also fail the allowlist.
+            let resigned = SignedIntent::sign(altered.intent, &key).unwrap();
+            assert!(resigned.verify(&key.verifying_key(), "buyer", 100).is_err());
+        }
     }
     #[test]
     fn invoice_checks_math_and_structure() {

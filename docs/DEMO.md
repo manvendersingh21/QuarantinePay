@@ -1,22 +1,15 @@
-# Three-minute demo
+# Demonstration guide
 
-- **0:00–0:16:** Introduce the signed buyer intent and verification window.
-- **0:16–0:42:** Explain local AI and the privacy boundary.
-- **0:42–0:56:** Show merchant substitution being rejected.
-- **0:56–1:47:** Show a failing delivery and PayPal Sandbox void.
-- **1:47–2:37:** Show a passing delivery and PayPal Sandbox capture.
-- **2:37–2:59:** Show the verified Channel3 API result slate and local-mirror search counts. The slate summarizes a real import; it does not show the operator clicking the UI control.
+The storefront, sellers, artifacts, shipment evidence, and delivery deadlines are fictional and simulated. The default replay payment mode also simulates authorization and settlement; it does not contact a payment provider or move funds. The dashboard and durable audit trail identify each result. No model download is required for the purchase journeys.
 
-Use the phrasing “AI reasoning and delivery verification stay on our server; PayPal handles the approved payment.” Avoid claiming that all data stays on the host.
+1. Start the app in replay mode and sign in as the administrator using the instructions in the README. Choose one of the five scenarios, read the seller, price, deadline, and acceptance terms, then confirm the intent and authorize the simulated payment.
+2. In the seller workspace, submit a passing example. Dataset and API deliveries undergo deterministic checks; report, freelance milestone, and physical goods also require an explicit buyer review before settlement. A physical shipment event is simulated evidence, and is not proof of product quality.
+3. Review the order state, agreed terms, verification reason and event history. For a review scenario, approve to request capture or reject to request void. These payment results are simulated in replay mode.
+4. Repeat with a failing example. The stated verification reason leads to a void. Create another order and let its accelerated delivery window expire to demonstrate a timeout. The replay decline option demonstrates a failed authorization without collecting card details. Choose ambiguous capture on another order and pass its checks (and review, where required) to show `reconciliation_required` with no claimed success.
+5. Repeat for the other scenarios; each is independently available in the local catalog. A new order provides a repeatable run without erasing existing audit history.
 
-Use replay mode for rehearsal and clearly identify it. Record real Sandbox payment evidence only after buyer approval. Avoid claiming escrow, instant production release, or complete injection detection. Do not show credentials, browser session cookies, or personal account information on video.
+The five cases demonstrate limited checks: CSV structure and completeness, report sections, API response schema and completeness, milestone evidence, and simulated shipment evidence. The report checks submitted Markdown text for the required headings and nonempty sections. The milestone submission uses a simulated file name and description, not uploaded file contents. Structural checks do not establish truth, subjective quality, or physical condition. AI recommendations do not make settlement decisions.
 
-Submission: target the Grand Prize and, only after proving live Channel3 usage, the Channel3 Sponsor Prize. The official rules cap wins at one Sponsor Prize per project. Upload a video under three minutes publicly to YouTube (unlisted visibility does not qualify), then submit its link and the public repository through the user's Devpost account. These account and video actions are not automated by the application. See the [official rules](https://paypalaihackathon.devpost.com/rules).
+For an optional PayPal Sandbox run, configure the Sandbox credentials and approval flow documented in the README. Present only an actual provider response as externally confirmed. The fictional seller, artifact and acceptance checks remain simulated even when a PayPal Sandbox payment is used. If Sandbox credentials are missing or calls fail, show replay mode and identify it as simulated. The optional read-only Shopify connector and other developer programs are described in [developer program research](DEVELOPER_PROGRAMS.md). Shopify test orders and QuarantinePay settlement are separate; no payment linkage is implemented. The connector has not been externally tested here.
 
-The submission recording is [`demo/quarantinepay-contest.mp4`](../demo/quarantinepay-contest.mp4): approximately 178.7 seconds, H.264 video and AAC audio. It ends with a designed proof slate based on the live Channel3 response and local-mirror search; it does not show the operator using the import UI. PayPal credential and login screens are excluded. The video is included in the public repository.
-
-The [description draft](YOUTUBE_DESCRIPTION.md), English [caption file](quarantinepay-demo.en.srt), and white-background [thumbnail PNG](quarantinepay-thumbnail.png) with its editable [SVG source](quarantinepay-thumbnail.svg) are checked in. The captions cover the 178.7-second recording and were validated against the narration for exact text, monotonic timestamps, and YouTube's two-line caption layout.
-
-The full version is available at [`demo/quarantinepay-full.mp4`](../demo/quarantinepay-full.mp4) (194.8 seconds), with [matching captions](../demo/quarantinepay-full.en.srt). The contest version uses the same slower pace and omits the repeated closing summary to remain under three minutes.
-
-The videos use Microsoft Ava neural narration generated from the public demo script through Microsoft’s online speech service. This is separate from the application’s locally hosted inference.
+The checked-in videos and captions predate these scenario changes. They show the earlier invoice demonstration, not the five-scenario journey; create a new recording before claiming otherwise. Review any recording for credentials, session cookies, or personal data before publication. An authorization hold is not escrow, and this is not a production marketplace.

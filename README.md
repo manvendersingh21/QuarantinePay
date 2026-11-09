@@ -1,66 +1,53 @@
 # QuarantinePay
 
-**Verify delivery. Then settle.** A Rust payment control center for agent-assisted purchases: buyer-confirmed Ed25519 intents, PayPal authorization holds, a bounded deterministic verifier, and durable capture/void operations.
-
-![QuarantinePay command center](docs/dashboard.png)
-
-Watch the [2:59 submission demo](demo/quarantinepay-contest.mp4) or the [full 3:15 version](demo/quarantinepay-full.mp4).
+**Verify delivery. Then settle.** QuarantinePay is a Rust hackathon demonstration of buyer-approved terms, delivery checks, and payment settlement. Five fictional scenarios cover a dataset, report, API data, freelance milestone, and physical goods. The default replay mode simulates payment activity locally; no real funds move. The storefront, sellers, goods, delivery events, and accelerated deadlines are fictional in every mode.
 
 ## Run locally
 
-Requires stable Rust, PostgreSQL 16+, and (for the live browser timeline) `wasm32-unknown-unknown` plus `wasm-bindgen-cli` matching the lockfile, currently 0.2.130.
+Requires stable Rust and PostgreSQL 16 or later. The core journeys do not require a model download, GPU, external account, or payment credentials.
 
-1. Create a PostgreSQL database and set `DATABASE_URL`. Copy `.env.example` to `.env` **only if you do not already have a credential file**.
-2. Set `QP_MODE=replay` for offline payment demonstrations. Set a random `QP_ADMIN_PASSWORD` of at least 24 characters, or let the server generate one in `.local/admin-password`.
-3. For the local assistant, install `zstd`, run `make local-model-install`, then `make local-model-serve` in another terminal and `make local-model-pull` once. The selected Qwen3 model downloads about 19 GB; a 32 GB NVIDIA GPU supports the validated configuration.
-4. Run `make build` (or `cargo build --workspace` for the server and verifier without browser enhancements).
-5. Run `RUST_LOG=info cargo run -p quarantinepay-server` from the repository root. Open `http://localhost:3000`.
-6. If no password was configured, read the generated password locally with `od -An -v -tx1 .local/admin-password | tr -d ' \n'`. Do not share it or commit it.
+1. Create a PostgreSQL database and set `DATABASE_URL`. Copy `.env.example` to `.env` only if you do not already have a credential file.
+2. Set `QP_MODE=replay` (the default) for simulated payments. Set `QP_ADMIN_PASSWORD` to a random value of at least 24 characters, or let the server generate one in `.local/admin-password`.
+3. Run `cargo build --workspace` and then `RUST_LOG=info cargo run -p quarantinepay-server` from the repository root. Open `http://localhost:3000` and sign in as the administrator.
+4. If no password was configured, read the generated password locally with `od -An -v -tx1 .local/admin-password | tr -d ' \n'`. Never share or commit it.
 
-Payment replay and automated tests work without a GPU or model download. The local assistant and listing classifier require the model runtime. Restart the server after changing credentials or inference configuration.
+The UI uses native HTML forms. The optional Rust/WASM module adds live refresh and countdowns; use `make build` to build browser assets if the WASM target and matching `wasm-bindgen-cli` are installed. Without it, refresh the page manually. Each new purchase is a repeatable demonstration, while previous orders and audit events remain in the database.
 
-The UI works through native HTML forms without JavaScript. The optional Rust/WASM module adds live event-driven refresh and deadline countdowns. JavaScript files are WASM loading/binding glue only.
+Choose a scenario, inspect its terms, confirm the intent, authorize the simulated payment, and submit a passing or failing delivery. Report, milestone, and physical goods require buyer review after their structural checks pass. Rejecting a delivery requests a void; failing a check or missing the accelerated deadline also leads to a void. Physical delivery evidence is simulated and does not prove product quality. See the [demo guide](docs/DEMO.md).
 
-### Live Sandbox
+## Fictional catalog
 
-Set `QP_MODE=sandbox`, `PAYPAL_CLIENT_ID`, `PAYPAL_CLIENT_SECRET`, and `PAYPAL_MERCHANT_ID` to the **same Sandbox business account**. The merchant ID is the 13-character account identifier, distinct from the REST application Client ID. REST authentication uses `PAYPAL_CLIENT_SECRET`; no separate merchant secret is required. Configure an HTTPS public URL in `QP_PUBLIC_BASE` and register `/api/webhooks/paypal`, setting `PAYPAL_WEBHOOK_ID` to its webhook ID. Use a separate Sandbox buyer account for approval.
+All five items cost USD 1.00 and use a 120-second accelerated delivery window.
 
-Click **Confirm intent & checkout**, wait for the approval link, approve at PayPal, then click **Confirm approval / authorize**. Authorization only succeeds after PayPal reports buyer approval. Submit the passing or failing fixture within 120 seconds. Refresh manually if WASM assets were not built.
+| Scenario | Seller and item | Acceptance terms |
+| --- | --- | --- |
+| Dataset | Alder Data · City mobility CSV | CSV columns `id`, `date`, and `value`, with at least two complete rows. |
+| Report | Northstar Research · Market report | A named Markdown report with nonempty `Executive summary` and `Findings` sections, followed by buyer review. |
+| API data | Harbor API · Weather response | At least two records with a nonempty `id` and numeric `temperature`. |
+| Freelance milestone | Lantern Studio · Design milestone | File and description, followed by buyer review. |
+| Physical goods | Cedar Supply · Desk lamp | Simulated delivered tracking evidence, followed by buyer review; evidence does not prove product quality. |
 
-The demo SKU costs USD 1.00. It purchases a JSON invoice fixture, not a physical Channel3 product. Capture/void are internal worker operations and are never exposed to the model. The application disables production PayPal endpoints.
+## Payment and integration boundaries
 
-### Integrations
+Replay results are simulated, including authorization and settlement; they are not externally confirmed. Select a simulated decline or ambiguous capture when creating an order. An ambiguous capture ends in `reconciliation_required`, not a claimed success. PayPal Sandbox is optional and never uses production endpoints. Set `QP_MODE=sandbox`, `PAYPAL_CLIENT_ID`, `PAYPAL_CLIENT_SECRET`, and `PAYPAL_MERCHANT_ID` to values from the same Sandbox business account. The merchant ID is its 13-character account identifier. Configure an HTTPS `QP_PUBLIC_BASE`, register `/api/webhooks/paypal`, and set `PAYPAL_WEBHOOK_ID`. Use a separate Sandbox buyer account for approval. Open the approval link and then confirm authorization in QuarantinePay. Call a payment externally confirmed only when the provider has actually confirmed the result; uncertainty requires reconciliation. Goods, seller, and delivery events remain fictional in Sandbox mode.
 
-- **Local Qwen (default):** `QP_PRIVATE_INFERENCE=true`, `QP_INFERENCE_PROVIDER=local`, `QP_LOCAL_LLM_BASE=http://127.0.0.1:11434`, and `QP_LOCAL_MODEL=qwen3:30b-instruct`. Prompts and product text are processed locally; no cloud fallback is implemented. See [privacy boundaries](docs/PRIVACY.md).
-- **Meta Muse (explicit opt-in):** set `QP_PRIVATE_INFERENCE=false` and `QP_INFERENCE_PROVIDER=muse`, then configure `MUSE_API_KEY` (or `MODEL_API_KEY`), `MUSE_MODEL`, `MUSE_API_BASE`. The cloud provider uses Meta's API and `muse-spark-1.1` when explicitly enabled. Recommendations are displayed in security activity and have no payment authority.
-- **Channel3:** An authenticated operator can import up to eight listings using the fixed `QP_CATALOG_SEED_QUERY` and `CHANNEL3_API_KEY`. Listings are screened before they enter the local PostgreSQL mirror; private user searches and model context stay local. Imported listings are discovery-only and cannot change the fixed demo checkout SKU/price. Live import requires a Channel3 key; without one the local demo catalog remains available.
-- **Elasticsearch 8+:** `ELASTIC_URL` and `ELASTIC_API_KEY` enable a 128-dimensional dense-vector index, seeded at startup with three labeled attack examples. The key needs index creation, document write, and search access. Embeddings use deterministic hashed token features, **not a trained security classifier**. The local model classifies listing text before vector screening. With no Elastic URL, local classification and heuristics remain available. Private mode requires a loopback Elastic URL. Configured-but-failing screening withholds catalog results.
+Never enter card data into QuarantinePay. Provider-hosted Sandbox checkout is separate; consult the provider's documented test values and supported triggers. The [developer program research](docs/DEVELOPER_PROGRAMS.md) describes Shopify, eBay, Square, PayPal, and their access requirements. No eBay or Square adapter is included.
 
-## Security and settlement
+The optional read-only Shopify connector requires a user-controlled partner development store. Set `SHOPIFY_DEV_STORE` to its lowercase `<store>.myshopify.com` hostname and `SHOPIFY_ADMIN_ACCESS_TOKEN` to an Admin API token with `read_products` and `read_orders` scopes. With the administrator bearer credential, request `GET /api/shopify/dev-store`. The connector first requires Shopify to confirm `shop.plan.partnerDevelopment`, then returns up to ten products and ten test orders; it rejects non-test order data. It does not create orders, connect Shopify checkout to QuarantinePay settlement, or prove a payment occurred. The connector has not been externally tested in this environment because credentials were unavailable. If unconfigured, use the fictional local storefront. See [Shopify development stores](https://shopify.dev/docs/apps/build/stores/development-stores) and [Shop plan fields](https://shopify.dev/docs/api/admin-graphql/latest/objects/shopplan).
 
-The authenticated buyer confirms the server-priced SKU, merchant, amount, and currency. The gateway signs those fields together with buyer identity, nonce, expiry, version, and acceptance-policy digest. Reconstructed typed serialization gives a fixed signature representation. Unknown fields are rejected; altered, expired, cross-buyer, or reused intents cannot create an order. Merchant and price are server allowlisted.
+Optional local inference and Channel3 catalog screening remain separate from settlement; the local model is not required for the scenarios and has no payment authority. If enabling optional inference, consult `.env.example` and [privacy boundaries](docs/PRIVACY.md). Imported third-party catalog data is discovery-only.
 
-Payment lifecycle: `create_pending → approval_pending → authorize_pending → authorized → quarantined → capture_pending/void_pending → captured/voided`. An expired delivery window or expired intent after authorization leads to void processing. Expired intents cannot initiate order creation, authorization, or capture; uncertain pending effects instead require reconciliation. Provider-confirmed results determine settlement; ambiguous outcomes remain pending and eventually become `reconciliation_required`.
+## Security and verification
 
-Replay and Sandbox intents and orders are stored with their payment mode. The dashboard, API, and worker use only the currently configured mode, and an intent cannot cross modes. Existing records migrate as replay data. PostgreSQL transactions consume each intent once. Workers serialize work using transaction-scoped advisory locks and persist stable request IDs before network effects. HTTP 401/403 refusals immediately stop automatic retries, preserve the authorization/request ID, and emit a sanitized audit event including PayPal's debug ID. Unknown outcomes and other failures retain stable request IDs, with retries stopping after five minutes. Webhooks are signature-verified through PayPal and deduplicated; the worker independently reads provider state and reconciles pending operations. A webhook never authorizes capture. For `reconciliation_required`, an operator must inspect the PayPal order/authorization before deciding the next action; no automatic replacement purchase occurs.
+The administrator confirms signed purchase terms. Signatures, expiry, one-use intent consumption, and mode isolation protect the purchase boundary. The application preserves durable payment operations and uses stable request IDs for retries; an uncertain result must remain pending or require reconciliation. A verifier checks submitted delivery data without executing it. The report checks submitted Markdown text for named headings and nonempty sections, but does not verify its claims. The milestone example contains a file name and description rather than uploaded file contents. Deterministic structure and completeness checks cannot establish truth or subjective quality, and physical delivery evidence cannot prove condition. A hold is not escrow.
 
-The acceptance policy checks bounded JSON structure, positive quantities, checked integer arithmetic, USD currency, and a USD 1.00 total. Deliveries are data: no uploaded code, shell, URLs, or scripts are executed. The local verifier process inherits no application environment and has a five-second timeout. `QP_VERIFIER_MODE=docker` uses a separate networkless, read-only, non-root container with resource limits (build the verifier image first). The server itself is a trusted gateway; this prototype does not split signing and payment into separate deployed services.
+This is a single-administrator, single-demo-buyer prototype, not a production marketplace. Browser sessions use HttpOnly, SameSite cookies and Origin checks on mutations. Keep passwords, signing keys, credentials, and database data out of Git. Back up `.local/signing-key` if orders need to survive deployment migration. A model or listing screening cannot guarantee detection of prompt injection.
 
-The default deployment is a **single-administrator, single-demo-buyer** application. API bearer credentials grant that administrator's authority. Browser sessions use HttpOnly, SameSite cookies and Origin checks on mutations; HTTPS enables Secure cookies. Deploy behind HTTPS and a rate-limiting reverse proxy. This is a hackathon prototype, not a multi-tenant payments platform or a general malware sandbox. Screening is defense in depth and cannot guarantee detection of prompt injection. Authorization holds are not escrow; production fund availability is provider-dependent.
+## Tests and API
 
-L0–L4 in the dashboard is this application's permission legend, not an external certification. Strict Rust excludes AG Grid/AG Studio, Bryntum, and APIMatic's TypeScript SDK; the dashboard and timeline are custom Rust implementations.
+Run `cargo fmt --all -- --check`, `cargo clippy --workspace --all-targets -- -D warnings`, and `cargo test --workspace`. The PostgreSQL lifecycle integration test is ignored by default: build the workspace, set `DATABASE_URL`, and run `cargo test -p quarantinepay-server --test lifecycle -- --ignored`. It creates an isolated schema. Optional external integration checks require separately configured Sandbox credentials; a local run does not establish external confirmation.
 
-## API and verification
-
-See [OpenAPI](docs/openapi.json), [Postman collection](docs/QuarantinePay.postman_collection.json), [demo script](docs/DEMO.md), and [validation notes](docs/VALIDATION.md).
-
-API requests use `Authorization: Bearer <QP_ADMIN_PASSWORD>`. A signed intent is obtained from `POST /api/intents` and sent unchanged to `POST /api/checkout`. Poll `GET /api/orders/{id}` for the approval URL and provider-confirmed status. `POST /api/orders/{id}/deliveries` accepts the JSON artifact itself. `GET /api/events?after=<event-id>` streams durable audit records via SSE.
-
-Run `cargo fmt --all -- --check`, `cargo clippy --workspace --all-targets -- -D warnings`, and `cargo test --workspace`. With PostgreSQL and a built verifier, run `cargo test -p quarantinepay-server --test lifecycle -- --ignored`. The integration test creates an isolated schema, launches its own replay server, checks tampering/replay/capture/void/expiry/CSRF, restarts the service to verify deadline recovery, then drops the schema. A failed test may leave an isolated test schema for inspection. Run `cargo test -p quarantinepay-server --bin quarantinepay-server permission_denied_stops_retries -- --ignored` to verify that permission errors stop after one attempt, retain authorization state, and that expired intents cannot initiate new effects. Run `cargo test -p quarantinepay-server --bin quarantinepay-server local_mirror_search -- --ignored` to test the local catalog mirror against an isolated PostgreSQL schema.
-
-`make build` compiles native binaries and WASM assets. `make verifier-image` builds the optional isolated verifier. Docker Compose starts the server, PostgreSQL, a GPU Ollama runtime, and loopback Elasticsearch. The application, model runtime, and vector index share a network namespace so inference and vector requests stay on loopback. It requires Docker Compose GPU support and NVIDIA Container Toolkit. Download the model with `docker compose exec ollama ollama pull qwen3:30b-instruct`; configure credentials through your ignored `.env`, never build arguments.
-
-No credentials, signing keys, local passwords, database data, or token values belong in Git. Back up `.local/signing-key` securely for any deployment expected to survive restarts. Rotating it invalidates sessions and existing intents; resolve outstanding authorizations before rotation.
+API requests use `Authorization: Bearer <QP_ADMIN_PASSWORD>`. The catalog is available at `GET /api/scenarios`. Signed intents are created at `POST /api/intents`, then submitted unchanged to `POST /api/checkout`; deliveries go to `POST /api/orders/{id}/deliveries`, reviews to `POST /api/orders/{id}/review`, and order state is available at `GET /api/orders/{id}`. `GET /api/events?after=<event-id>` streams durable audit events. See [OpenAPI](docs/openapi.json) for scenario, review, and Shopify endpoints. The older [Postman collection](docs/QuarantinePay.postman_collection.json) describes the previous invoice-only flow.
 
 ## License
 

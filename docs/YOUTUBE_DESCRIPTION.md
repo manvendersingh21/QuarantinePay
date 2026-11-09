@@ -1,4 +1,6 @@
-# YouTube upload draft
+# YouTube upload draft for the earlier recording
+
+**Historical:** This describes the checked-in invoice demonstration, not the current five-scenario application. Record and validate a new demo and update its description before submission.
 
 **Title**
 

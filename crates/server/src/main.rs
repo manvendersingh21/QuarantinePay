@@ -4,6 +4,7 @@ mod db;
 mod inference;
 mod integrations;
 mod paypal;
+mod shopify;
 mod worker;
 use axum::{
     Form, Json, Router,
@@ -14,7 +15,7 @@ use axum::{
 };
 use config::Config;
 use db::Order;
-use quarantinepay_core::{Intent, SignedIntent, policy_digest};
+use quarantinepay_core::{Intent, SignedIntent, policy_digest, scenario, scenario_fixture};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use sqlx::PgPool;
@@ -201,10 +202,11 @@ struct Confirmation {
     confirmed: bool,
 }
 async fn mint(app: &App, input: Confirmation) -> Api<SignedIntent> {
+    let selected = scenario(&input.sku);
     if !input.confirmed
-        || input.sku != "invoice-fixture-v1"
+        || (selected.is_none() && input.sku != "invoice-fixture-v1")
         || input.merchant_id != app.config.merchant
-        || input.amount_minor != 100
+        || input.amount_minor != selected.as_ref().map_or(100, |s| s.amount_minor)
         || input.currency != "USD"
         || app.config.merchant.is_empty()
     {
@@ -222,7 +224,10 @@ async fn mint(app: &App, input: Confirmation) -> Api<SignedIntent> {
         amount_minor: input.amount_minor,
         currency: input.currency,
         expires_at: chrono::Utc::now().timestamp() + 900,
-        policy_digest: policy_digest(),
+        policy_digest: selected
+            .as_ref()
+            .map_or_else(policy_digest, |s| s.signed_terms().digest()),
+        scenario: selected.map(|s| s.signed_terms()),
     };
     let signed = SignedIntent::sign(intent, &app.config.key)?;
     sqlx::query("INSERT INTO intents(id,buyer,token,mode) VALUES($1,$2,$3,$4)")
@@ -242,7 +247,7 @@ async fn intents(
     authenticated(&app, &h, true)?;
     Ok(Json(mint(&app, input).await?))
 }
-async fn checkout_inner(app: &App, signed: SignedIntent) -> Api<Uuid> {
+async fn checkout_inner(app: &App, signed: SignedIntent, outcome: &str) -> Api<Uuid> {
     if let Err(e) = signed.verify(
         &app.config.key.verifying_key(),
         "demo-buyer",
@@ -272,12 +277,12 @@ async fn checkout_inner(app: &App, signed: SignedIntent) -> Api<Uuid> {
         ));
     }
     let id = Uuid::new_v4();
-    sqlx::query("INSERT INTO orders(id,buyer,intent,state,operation,request_id,mode) VALUES($1,'demo-buyer',$2,'create_pending','create',$3,$4)").bind(id).bind(serde_json::to_value(&signed).unwrap()).bind(Uuid::new_v4()).bind(&app.config.mode).execute(&mut *tx).await?;
+    sqlx::query("INSERT INTO orders(id,buyer,intent,state,operation,request_id,mode,simulation_outcome) VALUES($1,'demo-buyer',$2,'create_pending','create',$3,$4,$5)").bind(id).bind(serde_json::to_value(&signed).unwrap()).bind(Uuid::new_v4()).bind(&app.config.mode).bind(outcome).execute(&mut *tx).await?;
     db::event_tx(
         &mut tx,
         Some(id),
         "intent_bound",
-        json!({"amount_minor":100,"currency":"USD","mode":app.config.mode}),
+        json!({"amount_minor":signed.intent.amount_minor,"currency":"USD","mode":app.config.mode,"scenario":signed.intent.scenario}),
     )
     .await?;
     tx.commit().await?;
@@ -290,7 +295,7 @@ async fn checkout(
 ) -> Api<Json<Value>> {
     authenticated(&app, &h, true)?;
     Ok(Json(
-        json!({"id":checkout_inner(&app,signed).await?,"state":"create_pending"}),
+        json!({"id":checkout_inner(&app,signed,"approve").await?,"state":"create_pending"}),
     ))
 }
 async fn authorize_inner(app: &App, id: Uuid) -> Api<()> {
@@ -344,20 +349,45 @@ async fn order(State(app): State<App>, h: HeaderMap, Path(id): Path<Uuid>) -> Ap
         .ok_or_else(|| Error(StatusCode::NOT_FOUND, "order not found".into()))?;
     Ok(Json(o))
 }
-async fn ui_purchase(State(app): State<App>, h: HeaderMap) -> Api<Redirect> {
+#[derive(Deserialize)]
+struct PurchaseForm {
+    sku: String,
+    #[serde(default)]
+    outcome: String,
+}
+async fn ui_purchase(
+    State(app): State<App>,
+    h: HeaderMap,
+    Form(form): Form<PurchaseForm>,
+) -> Api<Redirect> {
     authenticated(&app, &h, true)?;
+    let selected = scenario(&form.sku)
+        .ok_or_else(|| Error(StatusCode::BAD_REQUEST, "unknown scenario".into()))?;
+    if !["", "approve", "decline", "ambiguous"].contains(&form.outcome.as_str())
+        || (app.config.mode != "replay" && !["", "approve"].contains(&form.outcome.as_str()))
+    {
+        return Err(Error(
+            StatusCode::BAD_REQUEST,
+            "invalid simulated payment outcome".into(),
+        ));
+    }
     let signed = mint(
         &app,
         Confirmation {
-            sku: "invoice-fixture-v1".into(),
+            sku: form.sku,
             merchant_id: app.config.merchant.clone(),
-            amount_minor: 100,
+            amount_minor: selected.amount_minor,
             currency: "USD".into(),
             confirmed: true,
         },
     )
     .await?;
-    checkout_inner(&app, signed).await?;
+    let outcome = if form.outcome.is_empty() {
+        "approve"
+    } else {
+        &form.outcome
+    };
+    checkout_inner(&app, signed, outcome).await?;
     Ok(Redirect::to("/"))
 }
 async fn ui_authorize(State(app): State<App>, h: HeaderMap, Path(id): Path<Uuid>) -> Api<Redirect> {
@@ -376,12 +406,103 @@ async fn ui_deliver(
     Form(form): Form<DeliveryForm>,
 ) -> Api<Redirect> {
     authenticated(&app, &h, true)?;
-    let artifact = if form.fixture == "pass" {
-        include_str!("../../../fixtures/pass.json")
+    if !["pass", "fail"].contains(&form.fixture.as_str()) {
+        return Err(Error(StatusCode::BAD_REQUEST, "unknown fixture".into()));
+    }
+    let order: Order =
+        sqlx::query_as("SELECT * FROM orders WHERE id=$1 AND buyer='demo-buyer' AND mode=$2")
+            .bind(id)
+            .bind(&app.config.mode)
+            .fetch_optional(&app.pool)
+            .await?
+            .ok_or_else(|| Error(StatusCode::NOT_FOUND, "order not found".into()))?;
+    let signed: SignedIntent = serde_json::from_value(order.intent).map_err(anyhow::Error::from)?;
+    let artifact = if let Some(terms) = signed.intent.scenario {
+        scenario_fixture(&terms.id, form.fixture == "pass")
     } else {
-        include_str!("../../../fixtures/fail.json")
+        serde_json::from_str(if form.fixture == "pass" {
+            include_str!("../../../fixtures/pass.json")
+        } else {
+            include_str!("../../../fixtures/fail.json")
+        })
+        .unwrap()
     };
-    deliver_inner(&app, id, serde_json::from_str(artifact).unwrap()).await?;
+    deliver_inner(&app, id, artifact).await?;
+    Ok(Redirect::to("/"))
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Review {
+    decision: String,
+}
+async fn review_inner(app: &App, id: Uuid, decision: &str) -> Api<()> {
+    if !["approve", "reject"].contains(&decision) {
+        return Err(Error(
+            StatusCode::BAD_REQUEST,
+            "decision must be approve or reject".into(),
+        ));
+    }
+    let capture = decision == "approve";
+    let mut tx = app.pool.begin().await?;
+    let result = sqlx::query("UPDATE orders SET state=$2, operation=$3, request_id=$4, review_decision=$5, updated_at=now() WHERE id=$1 AND buyer='demo-buyer' AND mode=$6 AND state='buyer_review' AND deadline>now() AND (intent->'intent'->>'expires_at')::bigint>extract(epoch FROM now())")
+        .bind(id).bind(if capture { "capture_pending" } else { "void_pending" }).bind(if capture { "capture" } else { "void" }).bind(Uuid::new_v4()).bind(decision).bind(&app.config.mode).execute(&mut *tx).await?;
+    if result.rows_affected() != 1 {
+        return Err(Error(
+            StatusCode::CONFLICT,
+            "order is not awaiting a timely buyer review".into(),
+        ));
+    }
+    db::event_tx(
+        &mut tx,
+        Some(id),
+        "buyer_review",
+        json!({"decision":decision}),
+    )
+    .await?;
+    tx.commit().await?;
+    Ok(())
+}
+async fn review(
+    State(app): State<App>,
+    h: HeaderMap,
+    Path(id): Path<Uuid>,
+    Json(input): Json<Review>,
+) -> Api<Json<Value>> {
+    authenticated(&app, &h, true)?;
+    review_inner(&app, id, &input.decision).await?;
+    Ok(Json(json!({"decision":input.decision})))
+}
+async fn ui_review(
+    State(app): State<App>,
+    h: HeaderMap,
+    Path(id): Path<Uuid>,
+    Form(input): Form<Review>,
+) -> Api<Redirect> {
+    authenticated(&app, &h, true)?;
+    review_inner(&app, id, &input.decision).await?;
+    Ok(Redirect::to("/"))
+}
+async fn shopify_dev_store(State(app): State<App>, h: HeaderMap) -> Api<Json<Value>> {
+    authenticated(&app, &h, false)?;
+    Ok(Json(shopify::read_dev_store().await?))
+}
+async fn ui_reset(State(app): State<App>, h: HeaderMap) -> Api<Redirect> {
+    authenticated(&app, &h, true)?;
+    if app.config.mode != "replay" {
+        return Err(Error(
+            StatusCode::FORBIDDEN,
+            "reset is only available in simulation mode".into(),
+        ));
+    }
+    let mut tx = app.pool.begin().await?;
+    sqlx::query("DELETE FROM events WHERE order_id IN (SELECT id FROM orders WHERE mode='replay' AND buyer='demo-buyer')").execute(&mut *tx).await?;
+    sqlx::query("DELETE FROM orders WHERE mode='replay' AND buyer='demo-buyer'")
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query("DELETE FROM intents WHERE mode='replay' AND buyer='demo-buyer'")
+        .execute(&mut *tx)
+        .await?;
+    tx.commit().await?;
     Ok(Redirect::to("/"))
 }
 #[derive(Deserialize)]
@@ -459,7 +580,7 @@ async fn ui_redteam(State(app): State<App>, h: HeaderMap) -> Api<Redirect> {
     )
     .await?;
     signed.intent.merchant_id = "attacker-merchant".into();
-    if checkout_inner(&app, signed).await.is_ok() {
+    if checkout_inner(&app, signed, "approve").await.is_ok() {
         return Err(Error(
             StatusCode::INTERNAL_SERVER_ERROR,
             "security probe unexpectedly accepted".into(),
@@ -548,11 +669,14 @@ async fn main() -> anyhow::Result<()> {
                 )
             }),
         )
+        .route("/api/shopify/dev-store", get(shopify_dev_store))
+        .route("/api/scenarios", get(|| async { Json(quarantinepay_core::scenarios()) }))
         .route("/api/intents", post(intents))
         .route("/api/checkout", post(checkout))
         .route("/api/orders/{id}", get(order))
         .route("/api/orders/{id}/authorize", post(authorize))
         .route("/api/orders/{id}/deliveries", post(deliver))
+        .route("/api/orders/{id}/review", post(review))
         .route("/api/catalog/search", get(catalog))
         .route("/api/catalog/sync",post(catalog_sync))
         .route("/api/agent/runs", post(agent))
@@ -560,8 +684,10 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/webhooks/paypal", post(webhook))
         .route("/ui/redteam", post(ui_redteam))
         .route("/ui/purchase", post(ui_purchase))
+        .route("/ui/reset", post(ui_reset))
         .route("/ui/orders/{id}/authorize", post(ui_authorize))
         .route("/ui/orders/{id}/deliveries", post(ui_deliver))
+        .route("/ui/orders/{id}/review", post(ui_review))
         .route("/ui/agent", post(ui_agent))
         .route("/ui/catalog", post(ui_catalog))
         .route("/ui/catalog/sync",post(ui_catalog_sync))

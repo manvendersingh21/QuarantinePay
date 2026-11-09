@@ -2,8 +2,8 @@
   "openapi": "3.1.0",
   "info": {
     "title": "QuarantinePay",
-    "version": "0.1.0",
-    "description": "Sandbox-only signed-intent payment gateway. Capture and void are internal operations."
+    "version": "0.2.0",
+    "description": "Fictional commerce scenarios and signed intents. Replay payments are simulated; optional PayPal Sandbox is separate. Capture and void are internal operations."
   },
   "servers": [
     {
@@ -89,7 +89,14 @@
         "operationId": "BuyerApiIntents",
         "responses": {
           "200": {
-            "description": "Accepted request or current state"
+            "description": "Accepted request or current state",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SignedIntent"
+                }
+              }
+            }
           },
           "400": {
             "description": "Invalid request or unavailable integration"
@@ -227,7 +234,7 @@
     },
     "/api/orders/{id}/deliveries": {
       "post": {
-        "summary": "Submit JSON invoice artifact",
+        "summary": "Submit a scenario delivery as JSON data",
         "operationId": "SubmitApiOrders{Id}Deliveries",
         "responses": {
           "200": {
@@ -263,12 +270,50 @@
           "required": true,
           "content": {
             "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/Invoice"
+              "schema": {},
+              "examples": {
+                "dataset": {
+                  "value": {
+                    "csv": "id,date,value\n1,2026-01-01,10\n2,2026-01-02,12\n"
+                  }
+                },
+                "report": {
+                  "value": {
+                    "file": "market-report.md",
+                    "content": "# Executive summary\nDemand increased.\n# Findings\nTwo markets grew.\n"
+                  }
+                },
+                "api-data": {
+                  "value": {
+                    "records": [
+                      {
+                        "id": "a",
+                        "temperature": 20
+                      },
+                      {
+                        "id": "b",
+                        "temperature": 21
+                      }
+                    ]
+                  }
+                },
+                "freelance": {
+                  "value": {
+                    "file": "design.zip",
+                    "description": "First milestone"
+                  }
+                },
+                "physical": {
+                  "value": {
+                    "status": "delivered",
+                    "tracking": "SIM-12345"
+                  }
+                }
               }
             }
           }
-        }
+        },
+        "description": "An authorized order accepts one JSON artifact up to 64 KiB before its deadline. Data is checked asynchronously against its signed scenario terms. The API accepts arbitrary JSON; failure to meet the terms leads to a failed verification. The report contains Markdown text, while freelance file evidence is a simulated filename and description."
       }
     },
     "/api/events": {
@@ -367,6 +412,203 @@
           }
         }
       }
+    },
+    "/api/scenarios": {
+      "get": {
+        "summary": "List the five fictional server-priced scenarios",
+        "operationId": "listScenarios",
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "Scenario catalog",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ScenarioTerms"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/orders/{id}/review": {
+      "post": {
+        "summary": "Approve or reject a delivery awaiting buyer review",
+        "description": "Requires an authenticated administrator, a buyer_review state, and an unexpired deadline and intent. Approval queues capture; rejection queues void. Provider settlement remains asynchronous.",
+        "operationId": "reviewOrder",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "decision"
+                ],
+                "properties": {
+                  "decision": {
+                    "type": "string",
+                    "enum": [
+                      "approve",
+                      "reject"
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Decision recorded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "decision"
+                  ],
+                  "properties": {
+                    "decision": {
+                      "type": "string",
+                      "enum": [
+                        "approve",
+                        "reject"
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid decision"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "409": {
+            "description": "Order is not awaiting timely review"
+          }
+        }
+      }
+    },
+    "/api/shopify/dev-store": {
+      "get": {
+        "summary": "Read products and test orders from a configured Shopify partner development store",
+        "description": "Read-only; Shopify must confirm partnerDevelopment. Requires a user-controlled store and Admin API token with read_products and read_orders. Returns at most ten products and ten test orders; no Shopify checkout or payment is linked to QuarantinePay settlement. Not externally tested without credentials.",
+        "operationId": "readShopifyDevStore",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Shopify-confirmed development-store data; not QuarantinePay settlement",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "source",
+                    "externally_confirmed",
+                    "notice",
+                    "products",
+                    "test_orders"
+                  ],
+                  "properties": {
+                    "source": {
+                      "type": "string"
+                    },
+                    "externally_confirmed": {
+                      "type": "boolean",
+                      "const": true
+                    },
+                    "notice": {
+                      "type": "string"
+                    },
+                    "products": {
+                      "type": "array",
+                      "maxItems": 10,
+                      "items": {
+                        "type": "object",
+                        "required": [
+                          "id",
+                          "title"
+                        ],
+                        "properties": {
+                          "id": {
+                            "type": "string"
+                          },
+                          "title": {
+                            "type": "string"
+                          }
+                        }
+                      }
+                    },
+                    "test_orders": {
+                      "type": "array",
+                      "maxItems": 10,
+                      "items": {
+                        "type": "object",
+                        "required": [
+                          "id",
+                          "name",
+                          "test",
+                          "financial_status"
+                        ],
+                        "properties": {
+                          "id": {
+                            "type": "string"
+                          },
+                          "name": {
+                            "type": "string"
+                          },
+                          "test": {
+                            "type": "boolean",
+                            "const": true
+                          },
+                          "financial_status": {
+                            "type": "string"
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Unconfigured, invalid, or unavailable development store"
+          },
+          "401": {
+            "description": "Authentication required"
+          }
+        }
+      }
     }
   },
   "components": {
@@ -405,7 +647,14 @@
           },
           "sku": {
             "type": "string",
-            "const": "invoice-fixture-v1"
+            "enum": [
+              "dataset",
+              "report",
+              "api-data",
+              "freelance",
+              "physical",
+              "invoice-fixture-v1"
+            ]
           },
           "merchant_id": {
             "type": "string"
@@ -423,6 +672,10 @@
           },
           "policy_digest": {
             "type": "string"
+          },
+          "scenario": {
+            "$ref": "#/components/schemas/ScenarioTerms",
+            "description": "Signed acceptance terms for scenario orders; absent on legacy invoice intents."
           }
         }
       },
@@ -456,7 +709,14 @@
         "properties": {
           "sku": {
             "type": "string",
-            "const": "invoice-fixture-v1"
+            "enum": [
+              "dataset",
+              "report",
+              "api-data",
+              "freelance",
+              "physical",
+              "invoice-fixture-v1"
+            ]
           },
           "merchant_id": {
             "type": "string"
@@ -531,6 +791,51 @@
                 }
               }
             }
+          }
+        }
+      },
+      "ScenarioTerms": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "seller",
+          "item",
+          "amount_minor",
+          "terms",
+          "review_required",
+          "deadline_seconds"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "enum": [
+              "dataset",
+              "report",
+              "api-data",
+              "freelance",
+              "physical"
+            ]
+          },
+          "seller": {
+            "type": "string"
+          },
+          "item": {
+            "type": "string"
+          },
+          "amount_minor": {
+            "type": "integer",
+            "const": 100
+          },
+          "terms": {
+            "type": "string"
+          },
+          "review_required": {
+            "type": "boolean"
+          },
+          "deadline_seconds": {
+            "type": "integer",
+            "const": 120
           }
         }
       }

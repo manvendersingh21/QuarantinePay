@@ -248,6 +248,139 @@ async fn payment_security_and_recovery() {
     process = Some(start());
     tokio::time::sleep(std::time::Duration::from_secs(2)).await;
     wait(&client, &base, &recovered, "voided").await;
+    // Every offer exercises both successful and unsuccessful simulated delivery.
+    for offer in quarantinepay_core::scenarios() {
+        for pass in [true, false] {
+            let token: Value = client.post(format!("{base}/api/intents")).json(&json!({"sku":offer.id,"merchant_id":"replay-merchant","amount_minor":offer.amount_minor,"currency":"USD","confirmed":true})).send().await.unwrap().error_for_status().unwrap().json().await.unwrap();
+            let mut altered = token.clone();
+            altered["intent"]["scenario"]["terms"] = json!("changed");
+            assert_eq!(
+                client
+                    .post(format!("{base}/api/checkout"))
+                    .json(&altered)
+                    .send()
+                    .await
+                    .unwrap()
+                    .status(),
+                StatusCode::BAD_REQUEST
+            );
+            let order: Value = client
+                .post(format!("{base}/api/checkout"))
+                .json(&token)
+                .send()
+                .await
+                .unwrap()
+                .error_for_status()
+                .unwrap()
+                .json()
+                .await
+                .unwrap();
+            let id = order["id"].as_str().unwrap();
+            wait(&client, &base, id, "approval_pending").await;
+            client
+                .post(format!("{base}/api/orders/{id}/authorize"))
+                .send()
+                .await
+                .unwrap()
+                .error_for_status()
+                .unwrap();
+            wait(&client, &base, id, "authorized").await;
+            let artifact = quarantinepay_core::scenario_fixture(offer.id, pass);
+            client
+                .post(format!("{base}/api/orders/{id}/deliveries"))
+                .json(&artifact)
+                .send()
+                .await
+                .unwrap()
+                .error_for_status()
+                .unwrap();
+            if pass && offer.review_required {
+                wait(&client, &base, id, "buyer_review").await;
+                assert_eq!(
+                    anonymous
+                        .post(format!("{base}/api/orders/{id}/review"))
+                        .json(&json!({"decision":"approve"}))
+                        .send()
+                        .await
+                        .unwrap()
+                        .status(),
+                    StatusCode::UNAUTHORIZED
+                );
+                client
+                    .post(format!("{base}/api/orders/{id}/review"))
+                    .json(&json!({"decision":"approve"}))
+                    .send()
+                    .await
+                    .unwrap()
+                    .error_for_status()
+                    .unwrap();
+                assert_eq!(
+                    client
+                        .post(format!("{base}/api/orders/{id}/review"))
+                        .json(&json!({"decision":"approve"}))
+                        .send()
+                        .await
+                        .unwrap()
+                        .status(),
+                    StatusCode::CONFLICT
+                );
+            }
+            wait(&client, &base, id, if pass { "captured" } else { "voided" }).await;
+        }
+    }
+    // Replay-only outcome controls and buyer rejection produce distinct final states.
+    for (sku, outcome, expected) in [
+        ("dataset", "decline", "declined"),
+        ("dataset", "ambiguous", "reconciliation_required"),
+        ("report", "approve", "voided"),
+    ] {
+        client
+            .post(format!("{base}/ui/purchase"))
+            .form(&[("sku", sku), ("outcome", outcome)])
+            .send()
+            .await
+            .unwrap()
+            .error_for_status()
+            .unwrap();
+        let id: Uuid = sqlx::query_scalar(
+            "SELECT id FROM orders WHERE mode='replay' ORDER BY updated_at DESC LIMIT 1",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        let id = id.to_string();
+        wait(&client, &base, &id, "approval_pending").await;
+        client
+            .post(format!("{base}/api/orders/{id}/authorize"))
+            .send()
+            .await
+            .unwrap()
+            .error_for_status()
+            .unwrap();
+        if outcome != "decline" {
+            wait(&client, &base, &id, "authorized").await;
+            client
+                .post(format!("{base}/api/orders/{id}/deliveries"))
+                .json(&quarantinepay_core::scenario_fixture(sku, true))
+                .send()
+                .await
+                .unwrap()
+                .error_for_status()
+                .unwrap();
+            if sku == "report" {
+                wait(&client, &base, &id, "buyer_review").await;
+                client
+                    .post(format!("{base}/api/orders/{id}/review"))
+                    .json(&json!({"decision":"reject"}))
+                    .send()
+                    .await
+                    .unwrap()
+                    .error_for_status()
+                    .unwrap();
+            }
+        }
+        wait(&client, &base, &id, expected).await;
+    }
     // Browser login cookie must not authorize a cross-origin mutation.
     let login = anonymous
         .post(format!("{base}/login"))
@@ -289,6 +422,7 @@ async fn payment_security_and_recovery() {
     assert_eq!(
         anonymous
             .post(format!("{base}/ui/purchase"))
+            .form(&[("sku", "dataset"), ("outcome", "approve")])
             .header("Cookie", cookie)
             .header("Origin", "https://attacker.invalid")
             .send()

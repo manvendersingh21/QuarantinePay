@@ -19,6 +19,8 @@ pub struct Order {
     pub artifact: Option<Value>,
     pub verification: Option<Value>,
     pub provider_result: Option<Value>,
+    pub review_decision: Option<String>,
+    pub simulation_outcome: String,
     pub updated_at: chrono::DateTime<chrono::Utc>,
 }
 pub async fn event(pool: &PgPool, id: Option<Uuid>, kind: &str, detail: Value) -> Result<()> {

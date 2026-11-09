@@ -108,21 +108,50 @@ async fn process(app: &App, id: uuid::Uuid) -> Result<()> {
         tx.commit().await?;
         return Ok(());
     }
-    if matches!(order.state.as_str(), "authorized" | "quarantined") {
+    if matches!(
+        order.state.as_str(),
+        "authorized" | "quarantined" | "buyer_review"
+    ) {
         let expired = intent_expired || order.deadline.is_some_and(|t| t <= chrono::Utc::now());
-        if !expired && order.artifact.is_none() {
+        if !expired && (order.artifact.is_none() || order.state == "buyer_review") {
             return Ok(());
         }
         let verdict = if expired {
             json!({"passed":false,"reason":"verification deadline expired"})
         } else {
-            match verify(app, order.artifact.as_ref().unwrap()).await {
+            match if let Some(terms) = &signed.intent.scenario {
+                Ok(quarantinepay_core::verify_scenario(
+                    &terms.id,
+                    order.artifact.as_ref().unwrap(),
+                ))
+            } else {
+                verify(app, order.artifact.as_ref().unwrap()).await
+            } {
                 Ok(v) => serde_json::to_value(v)?,
                 Err(_) => json!({"passed":false,"reason":"verifier failed or timed out"}),
             }
         };
         let capture =
             verdict["passed"] == true && order.deadline.is_some_and(|t| t > chrono::Utc::now());
+        if capture
+            && signed
+                .intent
+                .scenario
+                .as_ref()
+                .is_some_and(|s| s.review_required)
+        {
+            sqlx::query("UPDATE orders SET state='buyer_review',verification=$2,updated_at=now() WHERE id=$1").bind(id).bind(&verdict).execute(&mut *tx).await?;
+            db::event_tx(&mut tx, Some(id), "verification_complete", verdict).await?;
+            db::event_tx(
+                &mut tx,
+                Some(id),
+                "buyer_review_required",
+                json!({"reason":"Acceptance requires an explicit buyer decision"}),
+            )
+            .await?;
+            tx.commit().await?;
+            return Ok(());
+        }
         order.state = if capture {
             "capture_pending"
         } else {
@@ -157,6 +186,42 @@ async fn process(app: &App, id: uuid::Uuid) -> Result<()> {
             Some(id),
             "reconciliation_required",
             json!({"operation":order.operation}),
+        )
+        .await?;
+        tx.commit().await?;
+        return Ok(());
+    }
+    if app.config.mode == "replay"
+        && order.state == "authorize_pending"
+        && order.simulation_outcome == "decline"
+    {
+        sqlx::query(
+            "UPDATE orders SET state='declined',provider_result=$2,updated_at=now() WHERE id=$1",
+        )
+        .bind(id)
+        .bind(json!({"simulated":true,"status":"DECLINED"}))
+        .execute(&mut *tx)
+        .await?;
+        db::event_tx(
+            &mut tx,
+            Some(id),
+            "simulated_decline",
+            json!({"reason":"Selected simulated authorization decline"}),
+        )
+        .await?;
+        tx.commit().await?;
+        return Ok(());
+    }
+    if app.config.mode == "replay"
+        && order.state == "capture_pending"
+        && order.simulation_outcome == "ambiguous"
+    {
+        sqlx::query("UPDATE orders SET state='reconciliation_required',provider_result=$2,updated_at=now() WHERE id=$1").bind(id).bind(json!({"simulated":true,"status":"UNKNOWN"})).execute(&mut *tx).await?;
+        db::event_tx(
+            &mut tx,
+            Some(id),
+            "simulated_ambiguous_result",
+            json!({"reason":"Simulated capture outcome is unknown; no success claimed"}),
         )
         .await?;
         tx.commit().await?;
@@ -209,7 +274,7 @@ async fn process(app: &App, id: uuid::Uuid) -> Result<()> {
                     let auth_id = auth["id"]
                         .as_str()
                         .ok_or_else(|| anyhow::anyhow!("missing authorization ID"))?;
-                    sqlx::query("UPDATE orders SET state='authorized',authorization_id=$2,deadline=now()+interval '120 seconds',provider_result=$3,updated_at=now() WHERE id=$1").bind(id).bind(auth_id).bind(&value).execute(&mut *tx).await?;
+                    sqlx::query("UPDATE orders SET state='authorized',authorization_id=$2,deadline=now()+($4 * interval '1 second'),provider_result=$3,updated_at=now() WHERE id=$1").bind(id).bind(auth_id).bind(&value).bind(signed.intent.scenario.as_ref().map_or(120_i64, |s| s.deadline_seconds as i64)).execute(&mut *tx).await?;
                 }
                 _ => {
                     let capture = order.state == "capture_pending";
@@ -223,8 +288,8 @@ async fn process(app: &App, id: uuid::Uuid) -> Result<()> {
             db::event_tx(
                 &mut tx,
                 Some(id),
-                "provider_confirmed",
-                json!({"operation":order.operation,"mode":app.config.mode}),
+                if app.config.mode == "replay" { "simulated_payment_result" } else { "provider_confirmed" },
+                json!({"operation":order.operation,"mode":app.config.mode,"simulated":app.config.mode == "replay"}),
             )
             .await?;
             tx.commit().await?;
@@ -255,7 +320,7 @@ pub async fn run(app: App) {
     let mut interval = tokio::time::interval(std::time::Duration::from_secs(2));
     loop {
         interval.tick().await;
-        let ids=sqlx::query_scalar::<_,uuid::Uuid>("SELECT id FROM orders WHERE mode=$1 AND state IN ('create_pending','authorize_pending','authorized','quarantined','capture_pending','void_pending') ORDER BY updated_at LIMIT 100").bind(&app.config.mode).fetch_all(&app.pool).await;
+        let ids=sqlx::query_scalar::<_,uuid::Uuid>("SELECT id FROM orders WHERE mode=$1 AND state IN ('create_pending','authorize_pending','authorized','quarantined','buyer_review','capture_pending','void_pending') ORDER BY updated_at LIMIT 100").bind(&app.config.mode).fetch_all(&app.pool).await;
         match ids {
             Ok(ids) => {
                 for id in ids {
@@ -321,6 +386,7 @@ mod tests {
                 currency: "USD".into(),
                 expires_at: chrono::Utc::now().timestamp() + 900,
                 policy_digest: policy_digest(),
+                scenario: None,
             },
             &config.key,
         )

@@ -1,3 +1,5 @@
+> **Historical validation:** The evidence below covers the earlier invoice-only build. It does not establish verification of the five-scenario implementation; run the current tests separately.
+
 # Validation
 
 Validated in the development workspace on 2026-11-06.

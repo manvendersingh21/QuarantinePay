@@ -19,23 +19,66 @@ pub fn render(
         .filter(|o| {
             matches!(
                 o["state"].as_str(),
-                Some("authorized" | "quarantined" | "capture_pending" | "void_pending")
+                Some(
+                    "authorized"
+                        | "quarantined"
+                        | "buyer_review"
+                        | "capture_pending"
+                        | "void_pending"
+                )
             ) || (o["state"] == "reconciliation_required" && o["authorization_id"].is_string())
         })
         .count();
     let captured = orders.iter().filter(|o| o["state"] == "captured").count();
     let voided = orders.iter().filter(|o| o["state"] == "voided").count();
+    let simulation = mode.eq_ignore_ascii_case("replay");
+    let payment_label = if simulation {
+        "Simulated payment outcome"
+    } else {
+        "PayPal Sandbox status"
+    };
+    let purchases = quarantinepay_core::scenarios().into_iter().map(|scenario| {
+        let id = scenario.id.to_string();
+        let terms = scenario.terms.to_string();
+        let seller = scenario.seller.to_string();
+        let item = scenario.item.to_string();
+        let price = format!("USD {:.2}", scenario.amount_minor as f64 / 100.0);
+        let review = if scenario.review_required { "Buyer approval required after checks." } else { "Passing checks authorize settlement." };
+        view! { <article class="panel purchase">
+            <span class="eyebrow">"FICTIONAL SELLER · SIMULATED DELIVERY"</span>
+            <h3>{item}</h3><p>{seller}" · "{price}</p>
+            <p class="terms">{terms}</p><p class="muted">{review}" Accelerated 120-second delivery window."</p>
+            <form method="post" action="/ui/purchase">
+                <input type="hidden" name="sku" value=id/>
+                <div hidden=!simulation><label>"Simulated payment outcome"<select name="outcome"><option value="approve">"Normal authorization and settlement"</option><option value="decline">"Authorization declined"</option><option value="ambiguous">"Unknown capture result (requires reconciliation)"</option></select></label></div>
+                <button>"Agree to terms & begin →"</button>
+            </form>
+        </article> }
+    }).collect_view();
     let cards=orders.into_iter().map(|o|{
   let id=o["id"].as_str().unwrap_or("").to_string(); let state=o["state"].as_str().unwrap_or("").to_string();
   let deadline=o["deadline"].as_str().unwrap_or("Awaiting authorization").to_string();
   let approval=o["approval_url"].as_str().unwrap_or("/").to_string();
-  let authorize=format!("/ui/orders/{id}/authorize"); let deliver=format!("/ui/orders/{id}/deliveries");
-  let can_authorize=state=="approval_pending"; let can_deliver=state=="authorized";
+  let intent=&o["intent"]["intent"];
+  let scenario_id=intent["sku"].as_str().unwrap_or("");
+  let scenario=quarantinepay_core::scenarios().into_iter().find(|s| s.id == scenario_id);
+  let signed_terms=&intent["scenario"];
+  let title=signed_terms["item"].as_str().or_else(|| scenario.as_ref().map(|s| s.item)).unwrap_or("Legacy invoice artifact").to_string();
+  let seller=signed_terms["seller"].as_str().or_else(|| scenario.as_ref().map(|s| s.seller)).unwrap_or("Legacy merchant").to_string();
+  let terms=signed_terms["terms"].as_str().or_else(|| scenario.as_ref().map(|s| s.terms)).unwrap_or("Legacy invoice verification policy").to_string();
+  let verification=o["verification"]["reason"].as_str().unwrap_or("Waiting for delivery").to_string();
+  let artifact=if o["artifact"].is_null() { "No delivery submitted".to_string() } else { o["artifact"].to_string() };
+  let authorize=format!("/ui/orders/{id}/authorize"); let deliver=format!("/ui/orders/{id}/deliveries"); let review=format!("/ui/orders/{id}/review");
+  let can_authorize=state=="approval_pending"; let can_deliver=state=="authorized"; let can_review=state=="buyer_review";
   let class=format!("order {state}");
-  view!{<article class=class><div class="order-head"><strong>"Invoice validation artifact"</strong><span class="badge">{state.clone()}</span></div>
-   <p class="muted mono">{id}</p><div class="track"><div class="progress"></div></div><p class="muted">"Verification deadline: "<time data-deadline=deadline.clone()>{deadline.clone()}</time></p>
-   <div class="actions"><div hidden=!can_authorize><a class="button secondary" href=approval.clone()>"Approve at PayPal"</a><form method="post" action=authorize.clone()><button>"Confirm approval / authorize"</button></form></div>
-   <div hidden=!can_deliver><form method="post" action=deliver.clone()><input type="hidden" name="fixture" value="pass"/><button>"Deliver passing artifact"</button></form><form method="post" action=deliver.clone()><input type="hidden" name="fixture" value="fail"/><button class="danger">"Deliver failing artifact"</button></form></div></div>
+  view!{<article class=class><div class="order-head"><strong>{title}</strong><span class="badge">{state.clone()}</span></div>
+   <p class="muted">{seller}" · fictional seller · "{payment_label}</p><p class="muted mono">{id}</p>
+   <p><strong>"Agreed terms: "</strong>{terms}</p><p><strong>"Verification: "</strong>{verification}</p>
+   <div class="track"><div class="progress"></div></div><p class="muted">"Accelerated deadline: "<time data-deadline=deadline.clone()>{deadline.clone()}</time></p>
+   <div hidden=!can_review><p>"Review the submitted simulated evidence before deciding. Delivery evidence does not prove product quality."</p><pre class="evidence">{artifact}</pre></div>
+   <div class="actions"><div hidden=!can_authorize><a hidden=simulation class="button secondary" href=approval.clone()>"Approve at PayPal Sandbox"</a><form method="post" action=authorize.clone()><button>{if simulation { "Authorize simulated payment" } else { "Confirm Sandbox approval / authorize" }}</button></form></div>
+   <div hidden=!can_deliver><p>"Seller workspace · simulated submission"</p><form method="post" action=deliver.clone()><input type="hidden" name="fixture" value="pass"/><button>"Submit passing example"</button></form><form method="post" action=deliver.clone()><input type="hidden" name="fixture" value="fail"/><button class="danger">"Submit failing example"</button></form></div>
+   <div hidden=!can_review><form method="post" action=review.clone()><input type="hidden" name="decision" value="approve"/><button>"Approve delivery"</button></form><form method="post" action=review.clone()><input type="hidden" name="decision" value="reject"/><button class="danger">"Reject delivery"</button></form></div></div>
   </article>}
  }).collect_view();
     let audit=events.into_iter().map(|e|{let kind=e["kind"].as_str().unwrap_or("").to_string();let detail=e["detail"].to_string();view!{<li><span class="dot"></span><div><strong>{kind}</strong><p class="muted mono">{detail}</p></div></li>}}).collect_view();
@@ -45,11 +88,11 @@ pub fn render(
     <main><header><div><div class="eyebrow">"TRUST IS VERIFIED"</div><h1>"Payment control center"</h1><p class="muted">"Every purchase bound. Every delivery verified. Every settlement accounted for."</p></div><div class="runtime-badges"><span class="mode">{mode.clone()}" MODE"</span><span class="privacy-label">{inference_label}</span></div></header>
     <div hidden=!show_message><div class="notice">{message.clone()}</div></div>
     <div hidden=logged_in><section class="panel login"><h2>"Open your workspace"</h2><p class="muted">"Sign in with your local administrator password."</p><form method="post" action="/login"><input type="password" name="password" placeholder="Workspace password" required/><button>"Sign in"</button></form></section></div>
-    <div hidden=!logged_in><section class="stats"><div><span>"Active authorization holds"</span><strong>{holds}</strong><small>"Awaiting verified resolution"</small></div><div><span>"Verified & captured"</span><strong>{captured}</strong><small>"Provider-confirmed settlements"</small></div><div><span>"Voided authorizations"</span><strong>{voided}</strong><small>"Failed checks or expired windows"</small></div></section>
-    <div class="columns"><section><div class="section-head"><h2>"Quarantine timeline"</h2><a href="/" class="muted">"Refresh status ↻"</a></div><div class="panel purchase"><div><span class="eyebrow">"CONTROLLED DIGITAL DELIVERY"</span><h3>"Validated invoice artifact"</h3><p class="muted">"USD 1.00 · deterministic acceptance policy · 120-second window"</p></div><form method="post" action="/ui/purchase"><button>"Confirm intent & checkout →"</button></form></div>{cards}
+    <div hidden=!logged_in><section class="stats"><div><span>"Active authorization holds"</span><strong>{holds}</strong><small>"Awaiting verified resolution"</small></div><div><span>"Verified & captured"</span><strong>{captured}</strong><small>{payment_label}</small></div><div><span>"Voided authorizations"</span><strong>{voided}</strong><small>"Failed checks or expired windows"</small></div></section>
+    <section><div class="section-head"><h2>"Fictional storefront"</h2><span class="badge">"ALL GOODS AND SELLERS SIMULATED"</span></div><p class="muted">"Choose a scenario and agree to its terms. The 120-second clock accelerates the demonstration."</p><div class="storefront">{purchases}</div></section><div class="columns"><section><div class="section-head"><h2>"Orders & seller workspace"</h2><a href="/" class="muted">"Refresh status ↻"</a></div>{if simulation { Some(view! { <form method="post" action="/ui/reset"><button class="danger">"Reset simulated demo data"</button><p class="muted">"Deletes replay orders, intents and their events. Sandbox records remain."</p></form> }) } else { None }}{cards}
     <section class="panel"><h2>"Shopping assistant"</h2><p class="muted">"Recommendations are checked against your confirmed purchase intent."</p><form method="post" action="/ui/agent"><input name="query" placeholder="Ask for a recommendation" required maxlength="2000"/><button>"Ask assistant"</button></form><form method="post" action="/ui/catalog"><input name="query" placeholder="Search the product catalog" required maxlength="200"/><button class="secondary">"Search catalog"</button></form><form method="post" action="/ui/catalog/sync"><button class="secondary">"Import public Channel3 catalog"</button><p class="muted">"Uses the configured public seed. Your private searches stay local."</p></form></section></section>
-    <section><div class="section-head"><h2>"Security activity"</h2><span class="badge">"AUDIT LOG"</span></div><div class="panel"><ul class="audit">{audit}</ul></div><div class="panel jurisdiction"><form method="post" action="/ui/redteam"><button class="danger">"Simulate merchant substitution"</button></form><h3>"Agent jurisdiction"</h3><p><b>"L0"</b>" Read screened catalog"</p><p><b>"L1"</b>" Recommend a purchase"</p><p><b>"L2"</b>" Buyer confirms signed intent"</p><p><b>"L3"</b>" Gateway authorizes payment"</p><p><b>"L4"</b>" Verifier gates settlement"</p><small class="muted">"Application permission levels. Model output grants no payment authority."</small></div></section></div></div>
-    <footer>"Sandbox demonstration · Payment fields go to PayPal · "<a href="https://github.com/manvendersingh21/QuarantinePay">"Source code ↗"</a></footer></main></body></html>};
+    <section><div class="panel"><h2>"Shopify development store"</h2><p class="muted">"View test catalog and orders from your configured development store. Shopify test orders are independent of QuarantinePay settlement."</p><a class="button secondary" href="/api/shopify/dev-store">"Open development store data"</a></div><div class="section-head"><h2>"Security activity"</h2><span class="badge">"AUDIT LOG"</span></div><div class="panel"><ul class="audit">{audit}</ul></div><div class="panel jurisdiction"><form method="post" action="/ui/redteam"><button class="danger">"Simulate merchant substitution"</button></form><h3>"Agent jurisdiction"</h3><p><b>"L0"</b>" Read screened catalog"</p><p><b>"L1"</b>" Recommend a purchase"</p><p><b>"L2"</b>" Buyer confirms signed intent"</p><p><b>"L3"</b>" Gateway authorizes payment"</p><p><b>"L4"</b>" Verifier gates settlement"</p><small class="muted">"Application permission levels. Model output grants no payment authority."</small></div></section></div></div>
+    <footer>"Fictional demonstration · No card details are collected here · Sandbox checkout, when enabled, is hosted by PayPal · "<a href="https://github.com/manvendersingh21/QuarantinePay">"Source code ↗"</a></footer></main></body></html>};
     format!("<!DOCTYPE html>{}", document.to_html())
 }
 pub const CSS: &str = r#"
@@ -84,7 +127,18 @@ h3 { font-size: 16px; margin: 8px 0; }
 .section-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; }
 .section-head h2 { margin: 0; }
 .panel, .order { margin-bottom: 18px; }
-.purchase { border-color: #b8ddcb; background: #fff; }
+.purchase { border-color: #b8ddcb; background: #fff; display: flex; flex-direction: column; }
+.storefront { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 14px; margin-bottom: 28px; perspective: 1100px; }
+.purchase { transform-origin: center bottom; animation: offer-arrive .55s both; transition: transform .2s ease, box-shadow .2s ease; }
+.purchase:nth-child(2) { animation-delay: .06s; } .purchase:nth-child(3) { animation-delay: .12s; } .purchase:nth-child(4) { animation-delay: .18s; } .purchase:nth-child(5) { animation-delay: .24s; }
+@media (hover: hover) { .purchase:hover { transform: translateY(-4px) rotateX(2deg); box-shadow: 0 14px 28px #153d2c19; } }
+@keyframes offer-arrive { from { opacity: 0; transform: translateY(12px) rotateX(-5deg); } to { opacity: 1; transform: translateY(0) rotateX(0); } }
+@media (prefers-reduced-motion: reduce) { .purchase { animation: none; transition: none; } .purchase:hover { transform: none; } }
+.purchase form { margin-top: auto; }
+.terms { font-size: 13px; }
+.evidence { white-space: pre-wrap; overflow-wrap: anywhere; background: #f6f8f7; padding: 12px; border-radius: 6px; }
+select { display: block; width: 100%; padding: 8px; margin: 8px 0 12px; border: 1px solid #bbb; border-radius: 6px; background: white; }
+.actions form { display: inline-block; margin: 3px; }
 button, .button { display: inline-block; background: var(--mint); border: 0; border-radius: 7px; color: #fff; font: 600 12px system-ui; padding: 11px 16px; cursor: pointer; text-decoration: none; }
 .secondary { background: #f5f5f5; color: #404040; box-shadow: inset 0 0 0 1px #d4d4d4; }
 .danger { background: #fff1f2; color: #a3233a; box-shadow: inset 0 0 0 1px #f1c4cc; }
@@ -113,3 +167,48 @@ a { color: var(--mint); }
 @media (max-width: 1000px) { aside { width: 190px; } main { margin-left: 190px; padding: 30px 24px; } .columns { grid-template-columns: 1fr; } }
 @media (max-width: 650px) { aside { position: static; width: auto; padding: 15px; border-right: 0; border-bottom: 1px solid var(--line); } .workspace-label, .nav, .aside-foot { display: none; } main { margin: 0; padding: 22px 16px; } .stats { gap: 8px; } .stats > div { padding: 12px; } .stats strong { font-size: 29px; } .stats small { display: none; } h1 { font-size: 25px; } header { gap: 12px; } }
 "#;
+
+#[cfg(test)]
+mod tests {
+    use super::render;
+    use serde_json::json;
+
+    #[test]
+    fn storefront_and_review_show_simulation_boundaries() {
+        let order = json!({"id":"order-1", "state":"buyer_review", "intent":{"intent":{"sku":"physical", "scenario":{"item":"Desk lamp", "seller":"Cedar Supply", "terms":"Signed delivery terms"}}}, "artifact":{"tracking":"DEMO-1"}, "verification":{"reason":"Evidence passed"}});
+        let page = render(
+            "REPLAY".into(),
+            "Local".into(),
+            vec![order],
+            vec![],
+            true,
+            String::new(),
+        );
+        for content in [
+            "City mobility CSV",
+            "Market report",
+            "Weather response",
+            "Design milestone",
+            "Desk lamp",
+            "Signed delivery terms",
+            "Simulated payment outcome",
+            "Approve delivery",
+            "Reject delivery",
+            "Delivery evidence does not prove product quality",
+        ] {
+            assert!(page.contains(content), "missing {content}");
+        }
+        assert!(page.contains("/ui/orders/order-1/review"));
+        assert!(page.contains("Unknown capture result"));
+        assert!(page.contains("/ui/reset"));
+        let sandbox = render(
+            "SANDBOX".into(),
+            "Local".into(),
+            vec![],
+            vec![],
+            true,
+            String::new(),
+        );
+        assert!(!sandbox.contains("/ui/reset"));
+    }
+}
