@@ -91,7 +91,7 @@ Not escrow (a hold is not escrow). Not a production marketplace or payment servi
 
 ## 12. Known gaps
 
-- Live PayPal Sandbox run of the agent-contract flow: verified on 2026-11-09 (`docs/VALIDATION.md`). A live failed void (authorization already captured at PayPal) was verified to end in `reconciliation_required` with no success claimed. A 403 refusal is covered by a mocked test.
+- Live PayPal Sandbox run of the agent-contract flow: verified on 2026-11-09 (`docs/VALIDATION.md`). A live failed void (authorization already captured at PayPal) was verified to end in `reconciliation_required` with no success claimed. A live 403 `PERMISSION_DENIED` refusal (second Sandbox merchant as payee) was verified to end in `reconciliation_required` with the authorization preserved.
 - Local-model planner and analyst on the agent flow: verified on 2026-11-09. Observed during development on a V100: planner about 7–40 s (the upper end includes a cold model load) and analyst about 7–14 s. The adversarial `agent_flow` integration test uses a mock model, not Qwen.
 - PayPal authorizations expire and voids can be refused. An earlier test saw `403 PERMISSION_DENIED` on void, which the app handles as `reconciliation_required`. No automatic reconciliation job exists.
 - Render deployment is untested. Without a persistent disk, the signing key is regenerated on every deploy.
