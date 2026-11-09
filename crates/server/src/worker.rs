@@ -56,6 +56,43 @@ async fn verify(app: &App, artifact: &Value) -> Result<Verdict> {
     );
     Ok(verdict)
 }
+/// Contract verification for either purchase type. Product deliveries are proven only by a
+/// carrier-signed attestation bound to this order.
+fn verify_any(
+    contract: &quarantinepay_core::PurchaseContract,
+    order: uuid::Uuid,
+    artifact: &Value,
+) -> Result<quarantinepay_core::contract::ContractVerdict> {
+    Ok(if contract.product.is_some() {
+        quarantinepay_core::product::verify_product_delivery(
+            contract,
+            &order.to_string(),
+            artifact,
+            &crate::carrier::key()?.verifying_key(),
+        )
+    } else {
+        quarantinepay_core::contract::verify_contract_delivery(contract, artifact)
+    })
+}
+/// Deterministic analysis for product deliveries: the carrier attestation is the evidence, and
+/// any instruction-like seller text forces a hold. No model is consulted.
+fn product_analysis(v: &quarantinepay_core::contract::ContractVerdict) -> Value {
+    let injected = !v.untrusted_instructions.is_empty();
+    json!({
+        "analyst": {"source":"rules","note":"Delivery proven by a carrier-signed attestation; seller text screened deterministically"},
+        "risk": if injected { "high" } else { "low" },
+        "injection_detected": injected,
+        "policy_hold": injected,
+        "findings": v.untrusted_instructions.iter().map(|f| json!({"rule":f.rule,"excerpt":f.excerpt,"source":"rules"})).collect::<Vec<_>>(),
+        "relevance": "on_topic",
+        "quality_concerns": [],
+        "recommended_action": if injected { "reject" } else { "approve" },
+        "summary": if injected { "The carrier confirmed delivery, but the seller's note tries to instruct the verifier; held for the buyer." } else { "The carrier attests delivery of the contracted item to the buyer's address." },
+        "payment_authority": false,
+        "evidence_sha256": v.evidence_sha256,
+        "analyzed_at": chrono::Utc::now(),
+    })
+}
 fn deadline_seconds(signed: &SignedIntent) -> i64 {
     if let Some(c) = &signed.intent.contract {
         return c.deadline_seconds as i64;
@@ -101,9 +138,12 @@ async fn pre_analysis(app: &App, id: uuid::Uuid) -> Result<Option<Value>> {
     let Some(contract) = signed.intent.contract else {
         return Ok(None);
     };
-    let verdict = quarantinepay_core::contract::verify_contract_delivery(&contract, &artifact);
+    let verdict = verify_any(&contract, id, &artifact)?;
     if !verdict.passed {
         return Ok(None);
+    }
+    if contract.product.is_some() {
+        return Ok(Some(product_analysis(&verdict)));
     }
     db::event(
         &app.pool,
@@ -181,12 +221,8 @@ async fn process(app: &App, id: uuid::Uuid) -> Result<()> {
             json!({"passed":false,"reason":"verification deadline expired"})
         } else {
             match if let Some(contract) = &signed.intent.contract {
-                Ok(serde_json::to_value(
-                    quarantinepay_core::contract::verify_contract_delivery(
-                        contract,
-                        order.artifact.as_ref().unwrap(),
-                    ),
-                )?)
+                verify_any(contract, id, order.artifact.as_ref().unwrap())
+                    .and_then(|v| Ok(serde_json::to_value(v)?))
             } else if let Some(terms) = &signed.intent.scenario {
                 Ok(serde_json::to_value(quarantinepay_core::verify_scenario(
                     &terms.id,
@@ -219,7 +255,13 @@ async fn process(app: &App, id: uuid::Uuid) -> Result<()> {
                 && a["injection_detected"] == false
                 && a["risk"] == "low"
                 && a["recommended_action"] == "approve"
-                && a["analyst"]["source"] == "model";
+                && (a["analyst"]["source"] == "model"
+                    || (a["analyst"]["source"] == "rules"
+                        && signed
+                            .intent
+                            .contract
+                            .as_ref()
+                            .is_some_and(|c| c.product.is_some())));
             if clean {
                 let request_id = uuid::Uuid::new_v4();
                 sqlx::query("UPDATE orders SET state='capture_pending',operation='capture',request_id=$2,verification=$3,analysis=$4,updated_at=now() WHERE id=$1")

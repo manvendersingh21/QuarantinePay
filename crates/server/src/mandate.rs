@@ -38,8 +38,16 @@ pub async fn create(app: &App, terms: MandateTerms) -> Result<Value> {
         currency: "USD".into(),
         max_per_purchase_minor: terms.max_per_purchase_minor,
         max_total_minor: terms.max_total_minor,
-        allowed_kinds: vec!["research_report".into()],
-        allowed_sellers: sellers().iter().map(|s| s.id.to_string()).collect(),
+        allowed_kinds: vec!["research_report".into(), "physical_product".into()],
+        allowed_sellers: sellers()
+            .iter()
+            .map(|s| s.id.to_string())
+            .chain(
+                quarantinepay_core::product::resellers()
+                    .iter()
+                    .map(|r| r.id.to_string()),
+            )
+            .collect(),
         min_competitors: 3,
         min_sources: 5,
         auto_capture_clean: terms.auto_capture_clean,
@@ -218,7 +226,14 @@ pub async fn check(
             contract.amount_minor as f64 / 100.0
         ),
         "Cumulative budget not exceeded".to_string(),
-        "Scope meets the mandate's minimum (competitors, sources)".to_string(),
+        if contract.product.is_some() {
+            format!(
+                "Exact real listing \"{}\" and tracked delivery to the buyer",
+                contract.item
+            )
+        } else {
+            "Scope meets the mandate's minimum (competitors, sources)".to_string()
+        },
         "PayPal wallet saved for merchant-initiated payment".to_string(),
     ];
     Ok(Decision {

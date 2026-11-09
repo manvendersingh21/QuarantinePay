@@ -2,13 +2,21 @@
 //! buyer's approval of the exact contract digest is what creates a signed intent and an order.
 use crate::{App, db};
 use anyhow::Result;
+use quarantinepay_core::PurchaseContract;
 use quarantinepay_core::contract::{
-    SignedMandate, compile_contract, compile_contract_under, negotiate, sellers,
+    Negotiation, Objective, SignedMandate, SpendingMandate, compile_contract_under, negotiate,
+    sellers,
 };
+use quarantinepay_core::product::{ProductTerms, compile_product_contract, negotiate_product};
 use serde_json::{Value, json};
 use uuid::Uuid;
 
-pub async fn create(app: &App, request: &str, mandate: Option<Uuid>) -> Result<Uuid> {
+pub async fn create(
+    app: &App,
+    request: &str,
+    mandate: Option<Uuid>,
+    external_discovery: bool,
+) -> Result<Uuid> {
     let request: String = request
         .chars()
         .filter(|c| !c.is_control() || *c == '\n')
@@ -19,11 +27,12 @@ pub async fn create(app: &App, request: &str, mandate: Option<Uuid>) -> Result<U
         "describe what the agent should buy"
     );
     let id = Uuid::new_v4();
-    sqlx::query("INSERT INTO agent_tasks(id,buyer,mode,request,state,mandate_id) VALUES($1,'demo-buyer',$2,$3,'planning',$4)")
+    sqlx::query("INSERT INTO agent_tasks(id,buyer,mode,request,state,mandate_id,external_discovery) VALUES($1,'demo-buyer',$2,$3,'planning',$4,$5)")
         .bind(id)
         .bind(&app.config.mode)
         .bind(&request)
         .bind(mandate)
+        .bind(external_discovery)
         .execute(&app.pool)
         .await?;
     db::task_event(
@@ -52,6 +61,23 @@ pub async fn create(app: &App, request: &str, mandate: Option<Uuid>) -> Result<U
         }
     });
     Ok(id)
+}
+
+/// What the agent is buying: a report from seller agents, or a discovered real listing.
+enum Purchase {
+    Report,
+    Product(Box<ProductTerms>),
+}
+fn compile(
+    purchase: &Purchase,
+    objective: &Objective,
+    negotiation: &Negotiation,
+    mandate: Option<&SpendingMandate>,
+) -> Result<PurchaseContract> {
+    match purchase {
+        Purchase::Report => compile_contract_under(objective, negotiation, mandate),
+        Purchase::Product(p) => compile_product_contract(objective, p, negotiation, mandate),
+    }
 }
 
 async fn run(app: &App, id: Uuid, request: &str, mandate_id: Option<Uuid>) -> Result<()> {
@@ -86,17 +112,67 @@ async fn run(app: &App, id: Uuid, request: &str, mandate_id: Option<Uuid>) -> Re
         &app.pool,
         id,
         "agent_objective",
-        json!({"task_id":id,"planner":planner["source"],"objective":objective}),
+        json!({"task_id":id,"planner":planner["source"],"purchase_type":planner["purchase_type"],"objective":objective}),
     )
     .await?;
-    db::task_event(
-        &app.pool,
-        id,
-        "agent_discovery",
-        json!({"task_id":id,"sellers":sellers().iter().map(|s| json!({"id":s.id,"name":s.name,"list_minor":s.list_minor})).collect::<Vec<_>>(),"note":"Fictional seller agents"}),
-    )
-    .await?;
-    let negotiation = negotiate(&objective);
+    let (purchase, negotiation) = if planner["purchase_type"] == "physical_product" {
+        let external: bool =
+            sqlx::query_scalar("SELECT external_discovery FROM agent_tasks WHERE id=$1")
+                .bind(id)
+                .fetch_one(&app.pool)
+                .await?;
+        let query = planner["product_query"].as_str().unwrap_or("").to_string();
+        let found = crate::discovery::search(app, &query, objective.budget_minor, external).await?;
+        sqlx::query("UPDATE agent_tasks SET discovery=$2 WHERE id=$1")
+            .bind(id)
+            .bind(&found.record)
+            .execute(&app.pool)
+            .await?;
+        db::task_event(
+            &app.pool,
+            id,
+            "agent_discovery_search",
+            json!({"task_id":id,"source":found.record["source"],"query":query,"results":found.record["results"].as_array().map_or(0,|r| r.len()),"external":external}),
+        )
+        .await?;
+        let Some(product) = found.selected else {
+            let reason = found.record["note"]
+                .as_str()
+                .unwrap_or("no eligible listing")
+                .to_string();
+            sqlx::query("UPDATE agent_tasks SET state='no_deal',error=$2,updated_at=now() WHERE id=$1 AND state='negotiating'")
+                .bind(id)
+                .bind(&reason)
+                .execute(&app.pool)
+                .await?;
+            db::task_event(
+                &app.pool,
+                id,
+                "agent_no_deal",
+                json!({"task_id":id,"reason":reason}),
+            )
+            .await?;
+            return Ok(());
+        };
+        db::task_event(
+            &app.pool,
+            id,
+            "agent_listing_selected",
+            json!({"task_id":id,"title":product.title,"retailer":product.retailer,"listed_price_minor":product.listed_price_minor,"source":"Channel3"}),
+        )
+        .await?;
+        let negotiation = negotiate_product(&objective, &product);
+        (Purchase::Product(Box::new(product)), negotiation)
+    } else {
+        db::task_event(
+            &app.pool,
+            id,
+            "agent_discovery",
+            json!({"task_id":id,"sellers":sellers().iter().map(|s| json!({"id":s.id,"name":s.name,"list_minor":s.list_minor})).collect::<Vec<_>>(),"note":"Fictional seller agents"}),
+        )
+        .await?;
+        (Purchase::Report, negotiate(&objective))
+    };
     db::task_event(
         &app.pool,
         id,
@@ -105,7 +181,7 @@ async fn run(app: &App, id: Uuid, request: &str, mandate_id: Option<Uuid>) -> Re
     )
     .await?;
     if let Some(m) = &mandate
-        && let Ok(contract) = compile_contract_under(&objective, &negotiation, Some(m))
+        && let Ok(contract) = compile(&purchase, &objective, &negotiation, Some(m))
     {
         let (approved, autonomy, order) =
             crate::autonomous_checkout(app, id, mandate_id.unwrap_or_default(), &contract).await?;
@@ -135,7 +211,7 @@ async fn run(app: &App, id: Uuid, request: &str, mandate_id: Option<Uuid>) -> Re
             .execute(&app.pool)
             .await?;
     }
-    match compile_contract(&objective, &negotiation) {
+    match compile(&purchase, &objective, &negotiation, None) {
         Ok(contract) => {
             let digest = contract.digest();
             sqlx::query("UPDATE agent_tasks SET state='awaiting_approval',negotiation=$2,proposal=$3,proposal_digest=$4,updated_at=now() WHERE id=$1 AND state='negotiating'")
@@ -172,7 +248,7 @@ async fn run(app: &App, id: Uuid, request: &str, mandate_id: Option<Uuid>) -> Re
     Ok(())
 }
 
-const TASK_JSON: &str = "SELECT jsonb_build_object('id',t.id,'request',t.request,'state',t.state,'planner',t.planner,'objective',t.objective,'negotiation',t.negotiation,'proposal',t.proposal,'proposal_digest',t.proposal_digest,'order_id',t.order_id,'error',t.error,'mandate_id',t.mandate_id,'autonomy',t.autonomy,'created_at',t.created_at,'updated_at',t.updated_at,'mode',t.mode,'order',(SELECT to_jsonb(o) FROM orders o WHERE o.id=t.order_id AND o.mode=t.mode)) FROM agent_tasks t";
+const TASK_JSON: &str = "SELECT jsonb_build_object('id',t.id,'request',t.request,'state',t.state,'planner',t.planner,'objective',t.objective,'negotiation',t.negotiation,'proposal',t.proposal,'proposal_digest',t.proposal_digest,'order_id',t.order_id,'error',t.error,'mandate_id',t.mandate_id,'autonomy',t.autonomy,'discovery',t.discovery,'external_discovery',t.external_discovery,'created_at',t.created_at,'updated_at',t.updated_at,'mode',t.mode,'order',(SELECT to_jsonb(o) FROM orders o WHERE o.id=t.order_id AND o.mode=t.mode)) FROM agent_tasks t";
 
 pub async fn get(app: &App, id: Uuid) -> Result<Option<Value>> {
     Ok(sqlx::query_scalar::<_, Value>(&format!(

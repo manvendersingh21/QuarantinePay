@@ -64,6 +64,9 @@ fn seller_names(ids: &Value) -> Vec<String> {
                     let id = text(id);
                     quarantinepay_core::contract::seller(&id)
                         .map(|s| s.name.to_string())
+                        .or_else(|| {
+                            quarantinepay_core::product::reseller(&id).map(|r| r.name.to_string())
+                        })
                         .unwrap_or(id)
                 })
                 .filter(|n| !n.is_empty())
@@ -78,6 +81,34 @@ fn all_seller_names() -> String {
         .map(|s| s.name)
         .collect::<Vec<_>>()
         .join(", ")
+}
+
+fn all_reseller_names() -> String {
+    quarantinepay_core::product::resellers()
+        .iter()
+        .map(|r| r.name)
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+fn purchase_types(kinds: &Value) -> String {
+    let names: Vec<&str> = kinds
+        .as_array()
+        .map(|a| {
+            a.iter()
+                .filter_map(|k| match k.as_str() {
+                    Some("research_report") => Some("Research reports"),
+                    Some(quarantinepay_core::product::PRODUCT_KIND) => Some("Physical products"),
+                    _ => None,
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    if names.is_empty() {
+        "—".into()
+    } else {
+        names.join(" · ")
+    }
 }
 
 fn http_url(v: &Value) -> Option<String> {
@@ -130,7 +161,8 @@ fn terms(m: &Value) -> String {
         ("Per-purchase cap", money(&t["max_per_purchase_minor"])),
         ("Total budget", money(&t["max_total_minor"])),
         ("Allowed sellers", sellers),
-        ("Scope floors", floors),
+        ("Purchase types", purchase_types(&t["allowed_kinds"])),
+        ("Report scope floors", floors),
         ("Auto-capture", auto.to_string()),
         (
             "Expires",
@@ -171,11 +203,12 @@ fn create_form() -> String {
             r#"<label class="field">Total budget (USD)<input type="number" name="max_total_usd" value="150" min="1" max="500" step="0.01" inputmode="decimal" required/></label>"#,
             r#"<label class="field">Valid for (hours)<input type="number" name="hours" value="24" min="1" max="168" step="1" inputmode="numeric" required/></label>"#,
             r#"</div><label class="check"><input type="checkbox" name="auto_capture_clean" value="true" checked/><span>{auto}</span></label>"#,
-            r#"<p class="muted small">Allowed sellers: {sellers} — all fictional; research reports only. Limits are clamped by policy (at most USD 100 per purchase, USD 500 total, 7 days). Sandbox test money only.</p>"#,
+            r#"<p class="muted small">Allowed sellers: report sellers {sellers}; reseller agents {resellers} — all fictional. Purchase types: research reports and physical products (real listings, simulated fulfilment). Limits are clamped by policy (at most USD 100 per purchase, USD 500 total, 7 days). Sandbox test money only.</p>"#,
             r#"<button class="primary-lg">Sign spending mandate</button></form>"#
         ),
         auto = esc(AUTO_CAPTURE_LABEL),
         sellers = esc(&all_seller_names()),
+        resellers = esc(&all_reseller_names()),
     )
 }
 

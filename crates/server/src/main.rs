@@ -1,8 +1,10 @@
 mod agent;
 mod analyst;
+mod carrier;
 mod catalog_cache;
 mod config;
 mod db;
+mod discovery;
 mod inference;
 mod integrations;
 mod mandate;
@@ -413,7 +415,7 @@ async fn ui_deliver(
     Form(form): Form<DeliveryForm>,
 ) -> Api<Redirect> {
     authenticated(&app, &h, true)?;
-    if !["pass", "fail", "malicious"].contains(&form.fixture.as_str()) {
+    if !["pass", "fail", "malicious", "forged", "wrong_item"].contains(&form.fixture.as_str()) {
         return Err(Error(StatusCode::BAD_REQUEST, "unknown fixture".into()));
     }
     let order: Order =
@@ -424,7 +426,26 @@ async fn ui_deliver(
             .await?
             .ok_or_else(|| Error(StatusCode::NOT_FOUND, "order not found".into()))?;
     let signed: SignedIntent = serde_json::from_value(order.intent).map_err(anyhow::Error::from)?;
-    let artifact = if let Some(contract) = &signed.intent.contract {
+    let artifact = if let Some(contract) = signed
+        .intent
+        .contract
+        .as_ref()
+        .filter(|c| c.product.is_some())
+    {
+        // Simulated fulfilment: honest examples are signed by the carrier; a forged proof is not.
+        quarantinepay_core::product::product_fixture(
+            contract,
+            &id.to_string(),
+            &form.fixture,
+            &carrier::key()?,
+            chrono::Utc::now().timestamp(),
+        )?
+    } else if ["forged", "wrong_item"].contains(&form.fixture.as_str()) {
+        return Err(Error(
+            StatusCode::BAD_REQUEST,
+            "carrier examples apply to product purchases".into(),
+        ));
+    } else if let Some(contract) = &signed.intent.contract {
         contract_fixture(contract, &form.fixture)
     } else if form.fixture == "malicious" {
         return Err(Error(
@@ -739,6 +760,16 @@ struct TaskRequest {
     /// Mandate the agent may buy under without asking (form checkbox or API field).
     #[serde(default, alias = "mandate_id")]
     use_mandate: Option<String>,
+    /// Opt-in: allow the product search terms (only) to be sent to Channel3.
+    #[serde(default)]
+    external_discovery: Option<Value>,
+}
+fn opted_in(v: &Option<Value>) -> bool {
+    match v {
+        Some(Value::Bool(b)) => *b,
+        Some(Value::String(s)) => matches!(s.as_str(), "true" | "on" | "1"),
+        _ => false,
+    }
 }
 fn mandate_choice(v: &Option<String>) -> Api<Option<Uuid>> {
     match v.as_deref().map(str::trim) {
@@ -993,7 +1024,13 @@ async fn api_create_task(
     Json(input): Json<TaskRequest>,
 ) -> Api<Json<Value>> {
     authenticated(&app, &h, true)?;
-    let id = agent::create(&app, &input.request, mandate_choice(&input.use_mandate)?).await?;
+    let id = agent::create(
+        &app,
+        &input.request,
+        mandate_choice(&input.use_mandate)?,
+        opted_in(&input.external_discovery),
+    )
+    .await?;
     Ok(Json(json!({"id":id,"state":"planning"})))
 }
 async fn api_tasks(State(app): State<App>, h: HeaderMap) -> Api<Json<Value>> {
@@ -1036,7 +1073,13 @@ async fn ui_create_task(
     Form(input): Form<TaskRequest>,
 ) -> Api<Redirect> {
     authenticated(&app, &h, true)?;
-    let id = agent::create(&app, &input.request, mandate_choice(&input.use_mandate)?).await?;
+    let id = agent::create(
+        &app,
+        &input.request,
+        mandate_choice(&input.use_mandate)?,
+        opted_in(&input.external_discovery),
+    )
+    .await?;
     Ok(Redirect::to(&format!("/agent/{id}")))
 }
 async fn ui_approve_task(

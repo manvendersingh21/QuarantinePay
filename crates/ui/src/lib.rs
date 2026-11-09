@@ -422,6 +422,54 @@ textarea:focus { border-color: var(--mint); outline: 3px solid #087f5b33; outlin
   .mandate-card .actions > *, .mandate-card .actions button, .mandate-card .actions .button { width: 100%; text-align: center; }
   .task-head-top { flex-wrap: wrap; } .head-chips { justify-content: flex-start; }
 }
+/* Physical products: real listings, reseller agents, carrier-verified delivery */
+.request-hint { margin: -4px 0 8px; overflow-wrap: anywhere; }
+.request-hint q { color: var(--ink); }
+.external-discovery { margin: 0 0 12px; padding: 10px 12px; border-radius: 10px; background: var(--blue-soft); border: 1px solid var(--blue-line); color: #173f66; }
+.external-discovery input { accent-color: var(--blue); }
+.sent-query { margin: 2px 0 0; padding: 8px 12px; border-radius: 8px; background: var(--blue-soft); border: 1px solid var(--blue-line); overflow-wrap: anywhere; }
+.sent-query span { font-size: 12px; color: var(--blue); font-weight: 600; margin-right: 4px; }
+.sent-query + p { margin: 4px 0 10px; }
+.listings { list-style: none; margin: 8px 0 10px; padding: 0; display: grid; gap: 8px; }
+.listing { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; background: #fff; min-width: 0; }
+.listing.selected { border-color: var(--mint); background: #f6fcf9; box-shadow: inset 4px 0 0 var(--mint); }
+.listing.ineligible { background: #fafafa; }
+.listing.ineligible .listing-title, .listing.ineligible .listing-price { color: #6b6b6b; }
+.listing.withheld { background: var(--red-soft); border-color: var(--red-line); border-style: dashed; }
+.listing-main { min-width: 0; flex: 1; display: flex; flex-direction: column; gap: 2px; }
+.listing-title { font-weight: 600; line-height: 1.4; overflow-wrap: anywhere; }
+.listing-main .chips { margin: 4px 0 0; }
+.listing-reason { margin: 4px 0 0; overflow-wrap: anywhere; }
+.listing-price { flex: none; font-size: 16px; font-weight: 600; }
+.seller-role { display: block; font-size: 11px; color: var(--muted); font-weight: 400; }
+.honest { margin: 10px 0 0; padding: 8px 12px; border-radius: 8px; background: var(--amber-soft); border: 1px solid var(--amber-line); color: #5c3a00; }
+.product-card { margin: 12px 0 4px; padding: 14px; border-radius: 10px; border: 1px solid var(--line); background: #fff; }
+.product-card h5 { margin: 4px 0 0; font-size: 15px; }
+.product-card > p { margin: 0; }
+.price-compare { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin: 10px 0 0; }
+.price-compare > div { padding: 10px 12px; border-radius: 8px; background: var(--soft); border: 1px solid var(--line); min-width: 0; }
+.price-compare .agreed { background: var(--mint-soft); border-color: var(--mint-line); }
+.price-compare span, .price-compare small { display: block; font-size: 11px; color: var(--muted); }
+.price-compare strong { display: block; font-size: 22px; font-weight: 600; letter-spacing: -.6px; font-variant-numeric: tabular-nums; }
+.price-compare .agreed strong { color: var(--mint); }
+.attestation { margin: 12px 0; padding: 12px 14px; border-radius: 10px; background: #f6f8f7; border: 1px solid var(--line); }
+.attestation-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; flex-wrap: wrap; }
+.attestation-head .chips { margin: 0; }
+.mono-kv { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 3px 14px; margin: 8px 0 6px; font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; }
+.mono-kv > div { display: contents; }
+.mono-kv dt { color: #737373; }
+.mono-kv dd { margin: 0; overflow-wrap: anywhere; }
+.attestation > p { margin: 0; }
+.seller-note { margin: 6px 0 0; padding: 8px 12px; border-left: 3px solid var(--amber-line); background: #fffdf7; font-size: 13px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.analyst-card.deterministic { border-color: var(--line); background: linear-gradient(180deg, #f8f9f8, #fff 50%); }
+.analyst-card.deterministic .eyebrow { color: #525252; }
+.analyst-card.deterministic.risk-high { border-color: var(--red-line); }
+@media (max-width: 650px) {
+  .listing { flex-direction: column; gap: 4px; } .listing-price { font-size: 15px; }
+  .price-compare { grid-template-columns: 1fr; }
+  .mono-kv { grid-template-columns: minmax(0, 1fr); gap: 0; } .mono-kv dd { margin-bottom: 4px; }
+  .delivery-checks li { padding: 7px 8px; }
+}
 "#;
 
 #[cfg(test)]

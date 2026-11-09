@@ -23,6 +23,18 @@ AI agents are starting to buy things. Today an agent that can call a payment API
 5. **Quarantine.** The seller delivers a Markdown report. The app runs deterministic checks (sections, distinct competitors, distinct HTTPS sources, `.md`, 64 KiB) and untrusted-instruction detection, and the AI analyst reviews it.
 6. **Settle.** A failed check leads to a **void**. A pass goes to **buyer review**. Any injection finding triggers a **policy hold**: approval then needs an explicit, audited `acknowledge_risk`. Capture uses a stable `PayPal-Request-Id`.
 
+### Real products, discovered live
+
+Ask for a physical item, for example *"Buy me an LED desk lamp under $90 with tracked delivery"*.
+
+- **Discovery:** with your opt-in, the agent searches **Channel3 live**. Only the extracted search terms ("LED desk lamp") leave the system.
+- **Screening and filtering:** every real listing is treated as untrusted data. Phrase rules and a grounded model pass screen out listings that try to instruct the agent. The rest are filtered by budget, stock and condition, and the cheapest eligible listing is selected.
+- **Negotiation:** three **fictional reseller agents** quote a delivered price for that exact listing and negotiate within budget.
+- **Contract:** binds the listing (title, retailer, listed price, URL), the ship-to address and the carrier.
+- **Capture:** requires an **independent delivery proof**, an attestation signed by the carrier's key, which the seller does not hold. It is bound to this order and contract, and must show the right item, the right address and status *delivered*. A forged proof, a substitute item, a parcel still in transit, or an injected seller note never captures.
+
+Listings and prices are real; resellers, fulfilment and the carrier are simulated, and labelled so in the UI.
+
 ### Autonomous mode: buy without clicking, never without limits
 
 You sign a **spending mandate** once: a per-purchase cap, a total budget, allowed sellers, minimum scope, an expiry of up to 7 days, and whether clean deliveries may auto-capture. One PayPal Sandbox approval saves (vaults) your PayPal wallet. QuarantinePay voids the USD 1.00 verification hold immediately.
@@ -184,6 +196,7 @@ CI ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)) runs these checks, i
 | Public deployment | **Live 2026-11-09** via Cloudflare quick tunnel at https://deck-com-range-occasional.trycloudflare.com (temporary URL). The full Sandbox demo passed through the public URL: void `64L774879U300943H` VOIDED, capture on `0EV5186317836644V` CAPTURED |
 | Render deployment | Blueprint provided; not deployed. The Docker image is unbuilt because containers cannot run on the dev host; the Dockerfile steps were replicated natively and smoke-tested |
 | Live provider credential refusal on void | **Verified 2026-11-09**: a real PayPal `401 invalid_client` led to `provider_permission_required` and `reconciliation_required`, with the authorization preserved and no success claimed |
+| **Real product discovered via Channel3, bought autonomously, carrier-verified** | **Verified 2026-11-09.** A live Channel3 search returned 8 real listings. The agent bought the Bostitch LED Desk Lamp (Staples, listed USD 60.49) via a reseller for USD 63.98 with no click: capture `2D536347CT300140M` COMPLETED after a carrier-signed delivery. A forged delivery proof was rejected and the hold `7H5728982C810040U` VOIDED. The `product_flow` test covers screening, a forged proof, a wrong item, mandate auto-capture, an injected note and no opt-in |
 | **Autonomous purchasing under a spending mandate** (vaulted wallet, no click) | **Verified 2026-11-09.** Mandate verification hold `2BH67756TV9096707` VOIDED. Clean purchase: capture `04H014221M4877141` COMPLETED (USD 47.25) with no human click. Injected purchase: escalated, rejected, `2G8288073K521383A` VOIDED. The `mandate_flow` test covers budget exhaustion, tampering and revocation |
 | Live PayPal **403** permission refusal on void | **Verified 2026-11-09**: with a second Sandbox merchant as payee, PayPal returned `403 NOT_AUTHORIZED / PERMISSION_DENIED`. The result was `provider_permission_required` and `reconciliation_required`, with the authorization `4VW92416K3021363U` preserved and still `CREATED` at PayPal |
 

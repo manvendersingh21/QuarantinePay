@@ -48,6 +48,9 @@ pub struct PurchaseContract {
     /// manually approved contracts, so their digests and signatures are unchanged.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mandate_id: Option<String>,
+    /// The exact real listing for physical-product purchases. Absent on report contracts.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub product: Option<crate::product::ProductTerms>,
 }
 
 fn printable(value: &str, min: usize, max: usize) -> bool {
@@ -61,10 +64,52 @@ impl PurchaseContract {
             serde_json::to_vec(self).expect("serializable contract"),
         ))
     }
+    /// Rules shared by every purchase type.
+    fn validate_common(&self) -> Result<()> {
+        ensure!(self.currency == "USD", "only USD contracts are supported");
+        ensure!(
+            self.amount_minor >= 100 && self.amount_minor <= self.budget_minor,
+            "price must be at least USD 1.00 and within the buyer budget"
+        );
+        ensure!(
+            self.budget_minor <= MAX_CONTRACT_MINOR,
+            "budget exceeds the USD 100.00 agent spending ceiling"
+        );
+        ensure!(
+            (MIN_DEADLINE_SECONDS..=MAX_DEADLINE_SECONDS).contains(&self.deadline_seconds),
+            "delivery window must be between 60 and 900 seconds"
+        );
+        ensure!(
+            printable(&self.topic, 3, 120),
+            "topic must be 3-120 printable characters"
+        );
+        ensure!(
+            self.buyer_review_required || self.mandate_id.is_some(),
+            "only a buyer-signed mandate can waive buyer review before capture"
+        );
+        ensure!(
+            self.negotiation_digest.len() == 64
+                && self
+                    .negotiation_digest
+                    .bytes()
+                    .all(|b| b.is_ascii_hexdigit()),
+            "negotiation digest required"
+        );
+        Ok(())
+    }
     /// Deterministic policy. Rejects unsupported or unbounded conditions instead of guessing.
     pub fn validate(&self) -> Result<()> {
         ensure!(self.version == 1, "unsupported contract version");
+        if self.kind == crate::product::PRODUCT_KIND {
+            return self
+                .validate_common()
+                .and_then(|_| crate::product::validate_product(self));
+        }
         ensure!(self.kind == "research_report", "unsupported purchase type");
+        ensure!(
+            self.product.is_none(),
+            "report contracts cannot carry a product"
+        );
         let seller = seller(&self.seller_id)
             .ok_or_else(|| anyhow::anyhow!("seller is not on the allowlist"))?;
         ensure!(
@@ -589,6 +634,7 @@ pub fn compile_contract_under(
         buyer_review_required: !mandate.is_some_and(|m| m.auto_capture_clean),
         negotiation_digest: negotiation.transcript_digest(),
         mandate_id: mandate.map(|m| m.id.clone()),
+        product: None,
     };
     contract.validate()?;
     Ok(contract)
@@ -638,12 +684,20 @@ impl SpendingMandate {
             "total budget must cover one purchase and stay within USD 500.00"
         );
         ensure!(
-            self.allowed_kinds == ["research_report"],
-            "only research_report purchases can be delegated"
+            !self.allowed_kinds.is_empty()
+                && self.allowed_kinds.len() <= 2
+                && self
+                    .allowed_kinds
+                    .iter()
+                    .all(|k| k == "research_report" || k == crate::product::PRODUCT_KIND),
+            "unsupported delegated purchase types"
         );
         ensure!(
             !self.allowed_sellers.is_empty()
-                && self.allowed_sellers.iter().all(|s| seller(s).is_some()),
+                && self
+                    .allowed_sellers
+                    .iter()
+                    .all(|s| seller(s).is_some() || crate::product::reseller(s).is_some()),
             "mandate sellers must be on the allowlist"
         );
         ensure!(
@@ -691,8 +745,9 @@ impl SpendingMandate {
         if !self.allowed_sellers.contains(&contract.seller_id) {
             v.push(format!("{} is not an allowed seller", contract.seller));
         }
-        if contract.minimum_competitors < self.min_competitors
-            || contract.minimum_sources < self.min_sources
+        if contract.kind == "research_report"
+            && (contract.minimum_competitors < self.min_competitors
+                || contract.minimum_sources < self.min_sources)
         {
             v.push("contract scope is below the mandate's minimum".into());
         }

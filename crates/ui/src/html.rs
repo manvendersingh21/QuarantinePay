@@ -181,7 +181,7 @@ pub(crate) fn shell(s: Shell<'_>) -> String {
             r#"<main><header><div><div class="eyebrow">{eyebrow}</div><h1>{heading}</h1><p class="muted">{subtitle}</p></div>"#,
             r#"<div class="runtime-badges"><span class="mode">{mode} MODE</span><span class="privacy-label">{inference}</span></div></header>"#,
             r#"{notice}{login}{content}"#,
-            r#"<footer>Fictional demonstration · Sellers, reports and deliveries are simulated · No card details are collected here · Sandbox checkout, when enabled, is hosted by PayPal · <a href="https://github.com/manvendersingh21/QuarantinePay">Source code ↗</a></footer></main></body></html>"#
+            r#"<footer>Fictional demonstration · Sellers, resellers, reports, fulfilment and carrier are simulated; product listings and prices come from Channel3 · No card details are collected here · Sandbox checkout, when enabled, is hosted by PayPal · <a href="https://github.com/manvendersingh21/QuarantinePay">Source code ↗</a></footer></main></body></html>"#
         ),
         title = esc(s.title),
         head = s.head,

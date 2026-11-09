@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
 pub mod contract;
+pub mod product;
 mod scenarios;
 pub use contract::{CONTRACT_SKU, PurchaseContract};
 pub use scenarios::{
