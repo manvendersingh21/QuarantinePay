@@ -48,17 +48,24 @@ a{color:var(--mint)}
 <div class="brand"><span class="logo">Q</span>QuarantinePay</div>
 <div class="eyebrow">PAYPAL AI HACKATHON · AGENTIC COMMERCE</div>
 <h1>An AI agent that buys on its own — and can’t be tricked into paying.</h1>
-<p class="lede">Sign one spending mandate. The buyer agent then discovers sellers, negotiates, signs a contract, and authorizes payment through your saved PayPal wallet, with no approval clicks. Money is captured only when deterministic checks and an AI analyst independently verify the delivery. Prompt-injected deliveries can't talk their way into a payment.</p>
+<p class="lede">Sign one spending mandate. The buyer agent then discovers real products (live via Channel3) or service sellers, negotiates, signs a contract, and authorizes payment through your saved PayPal wallet, with no approval clicks. Money is captured only when deterministic checks and an AI analyst independently verify the delivery. Prompt-injected deliveries can't talk their way into a payment.</p>
 <div class="cta">
 <a class="btn primary" href="https://deck-com-range-occasional.trycloudflare.com/agent" rel="noopener">Open live demo →</a>
 <a class="btn secondary" href="https://github.com/manvendersingh21/QuarantinePay">Source code</a>
 <a class="btn secondary" href="https://github.com/manvendersingh21/QuarantinePay/blob/main/docs/VALIDATION.md">Verification evidence</a>
 </div>
-<p class="note">The live demo runs the full stack (Rust gateway, local Qwen3 model on a GPU, real PayPal <strong>Sandbox</strong>) behind a Cloudflare tunnel; sign-in required. Live link last updated 2026-11-09 23:29 UTC. If it doesn't load, the video below shows the same flow.</p>
+<p class="note">The live demo runs the full stack (Rust gateway, local Qwen3 model on a GPU, real PayPal <strong>Sandbox</strong>) behind a Cloudflare tunnel; sign-in required. Live link last updated 2026-11-09 23:52 UTC. If it doesn't load, the video below shows the same flow.</p>
 
 <video controls preload="metadata" poster="poster.png">
 <source src="quarantinepay-autonomous-demo.mp4" type="video/mp4">
 <track kind="captions" src="quarantinepay-autonomous-demo.en.vtt" srclang="en" label="English" default>
+</video>
+
+<h2>Buying a real product</h2>
+<p class="note">A live Channel3 search finds real LED desk lamps, and the agent buys one through a reseller agent with no click. Payment is captured only after a carrier-signed delivery proof; a forged proof is voided. Listings and prices are real; resellers, fulfilment and the carrier are simulated.</p>
+<video controls preload="metadata" poster="poster-product.png">
+<source src="quarantinepay-real-product-demo.mp4" type="video/mp4">
+<track kind="captions" src="quarantinepay-real-product-demo.en.vtt" srclang="en" label="English">
 </video>
 
 <h2>What the AI can and cannot do</h2>
@@ -72,6 +79,8 @@ a{color:var(--mint)}
 <h2>Verified on live PayPal Sandbox (2026-11-09)</h2>
 <div class="table-wrap"><table>
 <tr><th>Story</th><th>What happened</th><th>PayPal (fresh API read)</th></tr>
+<tr><td>Real product (Channel3), autonomous, carrier-verified</td><td>Bostitch LED Desk Lamp from staples.com via reseller; carrier-signed delivery verified; auto-captured</td><td><span class="ok">CAPTURED</span> · capture <code>04809152F1907772J</code> COMPLETED</td></tr>
+<tr><td>Real product, forged delivery proof</td><td>Seller-signed "proof" fails the carrier signature check</td><td><span class="ok">VOIDED</span> · authorization <code>9NE674699R6537024</code></td></tr>
 <tr><td>Autonomous purchase under a mandate</td><td>No approval click: mandate check passes, vault authorization, clean delivery auto-captured</td><td><span class="ok">CAPTURED</span> · capture <code>4M512246EX858693T</code> COMPLETED</td></tr>
 <tr><td>Autonomous purchase, injected delivery</td><td>Autonomy stops: policy hold, escalated to the buyer, rejected</td><td><span class="ok">VOIDED</span> · authorization <code>7UV96267LR272553S</code></td></tr>
 <tr><td>Compliant delivery (manual approval)</td><td>Checks pass, analyst low risk, buyer approves</td><td><span class="ok">CAPTURED</span> · capture <code>2P0047510S322170S</code> COMPLETED</td></tr>
