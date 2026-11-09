@@ -1,0 +1,95 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>QuarantinePay</title>
+<meta name="description" content="The trust layer that lets AI agents safely spend money. PayPal AI Hackathon project.">
+<style>
+:root{--bg:#fff;--ink:#262626;--muted:#5f5f5f;--line:#e5e5e5;--mint:#087f5b;--mint-soft:#edf8f2;--mint-line:#b8ddcb;--warn:#8a5a00;--warn-soft:#fff6e5}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#111614;--ink:#e8ece9;--muted:#a3aca7;--line:#2a332f;--mint:#4cc79a;--mint-soft:#15241d;--mint-line:#2c4a3d;--warn:#e8b75c;--warn-soft:#2a2111}}
+:root[data-theme="dark"]{--bg:#111614;--ink:#e8ece9;--muted:#a3aca7;--line:#2a332f;--mint:#4cc79a;--mint-soft:#15241d;--mint-line:#2c4a3d;--warn:#e8b75c;--warn-soft:#2a2111}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.6 system-ui,-apple-system,"Segoe UI",sans-serif}
+main{max-width:1040px;margin:0 auto;padding:48px 16px 64px}
+.brand{display:flex;align-items:center;gap:12px;font-weight:700;font-size:20px;letter-spacing:-.4px}
+.logo{display:grid;place-items:center;width:40px;height:42px;border:1.5px solid var(--mint-line);border-radius:12px;color:var(--mint);font-size:24px}
+.eyebrow{margin-top:40px;font-size:12px;letter-spacing:2.5px;color:var(--mint);font-weight:650}
+h1{font-size:clamp(32px,5vw,52px);line-height:1.1;letter-spacing:-1.5px;margin:12px 0 16px}
+.lede{font-size:19px;color:var(--muted);max-width:760px;margin:0}
+.cta{display:flex;flex-wrap:wrap;gap:12px;margin:28px 0 8px}
+.btn{display:inline-block;padding:13px 20px;border-radius:9px;font-weight:650;text-decoration:none;font-size:15px}
+.btn.primary{background:var(--mint);color:#fff}
+.btn.secondary{border:1px solid var(--line);color:var(--ink)}
+.note{font-size:13px;color:var(--muted);margin:6px 0 0}
+video{width:100%;border-radius:12px;border:1px solid var(--line);margin-top:32px;background:#000}
+h2{font-size:22px;letter-spacing:-.4px;margin:48px 0 14px}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:14px}
+.card{border:1px solid var(--line);border-radius:12px;padding:18px}
+.card h3{margin:0 0 6px;font-size:16px}
+.card p{margin:0;color:var(--muted);font-size:14px}
+table{width:100%;border-collapse:collapse;font-size:14px}
+th,td{text-align:left;padding:10px 8px;border-bottom:1px solid var(--line);vertical-align:top}
+th{color:var(--muted);font-weight:600}
+code{font:13px ui-monospace,SFMono-Regular,Menlo,monospace;overflow-wrap:anywhere}
+.ok{color:var(--mint);font-weight:650}
+.shots{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px}
+.shots a{display:block;border:1px solid var(--line);border-radius:10px;overflow:hidden;height:220px}
+.shots img{width:100%;display:block}
+.honest{background:var(--warn-soft);border-radius:12px;padding:16px 18px;color:var(--ink);font-size:14px}
+.honest strong{color:var(--warn)}
+.table-wrap{overflow-x:auto}
+footer{margin-top:48px;font-size:13px;color:var(--muted)}
+a{color:var(--mint)}
+</style>
+</head>
+<body>
+<main>
+<div class="brand"><span class="logo">Q</span>QuarantinePay</div>
+<div class="eyebrow">PAYPAL AI HACKATHON · AGENTIC COMMERCE</div>
+<h1>The trust layer that lets AI agents safely spend money.</h1>
+<p class="lede">A buyer agent negotiates and proposes a machine-readable contract. The buyer approves its exact hash. PayPal holds the money, and it is captured only when deterministic policy verifies the delivery. Prompt-injected deliveries can't talk their way into a payment.</p>
+<div class="cta">
+<a class="btn primary" href="https://deck-com-range-occasional.trycloudflare.com/agent" rel="noopener">Open live demo →</a>
+<a class="btn secondary" href="https://github.com/manvendersingh21/QuarantinePay">Source code</a>
+<a class="btn secondary" href="https://github.com/manvendersingh21/QuarantinePay/blob/main/docs/VALIDATION.md">Verification evidence</a>
+</div>
+<p class="note">The live demo runs the full stack (Rust gateway, local Qwen3 model on a GPU, real PayPal <strong>Sandbox</strong>) behind a Cloudflare tunnel; sign-in required. Live link last updated 2026-11-09 22:35 UTC. If it doesn't load, the video below shows the same flow.</p>
+
+<video controls preload="metadata" poster="poster.png">
+<source src="quarantinepay-agent-demo.mp4" type="video/mp4">
+<track kind="captions" src="quarantinepay-agent-demo.en.vtt" srclang="en" label="English" default>
+</video>
+
+<h2>What the AI can and cannot do</h2>
+<div class="grid">
+<div class="card"><h3>Plans and negotiates</h3><p>A local model extracts budget and scope; the buyer's own written amount is a hard cap. Seller agents negotiate within budget and floors.</p></div>
+<div class="card"><h3>Proposes, never signs</h3><p>Only the buyer's approval of the exact contract hash creates a signed intent. Any change to the terms is refused.</p></div>
+<div class="card"><h3>Adds caution, never removes it</h3><p>The AI analyst can flag manipulation or recommend rejection, but it can't lift a policy hold or move money.</p></div>
+<div class="card"><h3>Honest outcomes</h3><p>Uncertain or refused provider results become <code>reconciliation_required</code>, never a claimed success.</p></div>
+</div>
+
+<h2>Verified on live PayPal Sandbox (2026-11-09)</h2>
+<div class="table-wrap"><table>
+<tr><th>Story</th><th>What happened</th><th>PayPal (fresh API read)</th></tr>
+<tr><td>Compliant delivery</td><td>Checks pass, analyst low risk, buyer approves</td><td><span class="ok">CAPTURED</span> · capture <code>2P0047510S322170S</code> COMPLETED</td></tr>
+<tr><td>Prompt-injected delivery</td><td>Structure passes; rules and AI flag it; policy hold; buyer rejects</td><td><span class="ok">VOIDED</span> · authorization <code>0N41668771224050H</code></td></tr>
+<tr><td>Void after out-of-band capture</td><td>Gateway sees PayPal state <code>CAPTURED</code>, records a conflict, claims nothing</td><td>422 <code>PREVIOUSLY_CAPTURED</code> · authorization <code>4SM79001VH418320T</code></td></tr>
+<tr><td>Credential refusal on void</td><td>Real PayPal 401 leads to reconciliation, with the authorization preserved</td><td>Still <code>CREATED</code> until operator reconciliation</td></tr>
+</table></div>
+
+<h2>Screens</h2>
+<div class="shots">
+<a href="1-agent-proposal.png"><img src="1-agent-proposal.png" alt="Agent console with negotiation and proposed contract" loading="lazy"></a>
+<a href="2-injection-policy-hold.png"><img src="2-injection-policy-hold.png" alt="Injected delivery under policy hold" loading="lazy"></a>
+<a href="3-clean-delivery-captured.png"><img src="3-clean-delivery-captured.png" alt="Compliant delivery captured" loading="lazy"></a>
+<a href="4-intelligence-grid.png"><img src="4-intelligence-grid.png" alt="AG Grid transaction intelligence" loading="lazy"></a>
+</div>
+
+<h2>Boundaries</h2>
+<p class="honest"><strong>Demo honesty:</strong> sellers, reports and deliveries are fictional. Payments are PayPal Sandbox test money, and a hold is not escrow. Checks verify structure and counts, not truth. Injection detection can't guarantee it catches everything, which is why it can only add caution. The video's voice-over is synthesized, and waits for the model and PayPal are cut.</p>
+
+<footer>Built with Rust, Axum, PostgreSQL, PayPal Orders v2 (Sandbox), Ollama Qwen3-30B, AG Grid Community, Leptos and WebAssembly. MIT licensed.</footer>
+</main>
+</body>
+</html>
