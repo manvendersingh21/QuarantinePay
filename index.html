@@ -47,24 +47,24 @@ a{color:var(--mint)}
 <main>
 <div class="brand"><span class="logo">Q</span>QuarantinePay</div>
 <div class="eyebrow">PAYPAL AI HACKATHON · AGENTIC COMMERCE</div>
-<h1>The trust layer that lets AI agents safely spend money.</h1>
-<p class="lede">A buyer agent negotiates and proposes a machine-readable contract. The buyer approves its exact hash. PayPal holds the money, and it is captured only when deterministic policy verifies the delivery. Prompt-injected deliveries can't talk their way into a payment.</p>
+<h1>An AI agent that buys on its own — and can’t be tricked into paying.</h1>
+<p class="lede">Sign one spending mandate. The buyer agent then discovers sellers, negotiates, signs a contract, and authorizes payment through your saved PayPal wallet, with no approval clicks. Money is captured only when deterministic checks and an AI analyst independently verify the delivery. Prompt-injected deliveries can't talk their way into a payment.</p>
 <div class="cta">
 <a class="btn primary" href="https://deck-com-range-occasional.trycloudflare.com/agent" rel="noopener">Open live demo →</a>
 <a class="btn secondary" href="https://github.com/manvendersingh21/QuarantinePay">Source code</a>
 <a class="btn secondary" href="https://github.com/manvendersingh21/QuarantinePay/blob/main/docs/VALIDATION.md">Verification evidence</a>
 </div>
-<p class="note">The live demo runs the full stack (Rust gateway, local Qwen3 model on a GPU, real PayPal <strong>Sandbox</strong>) behind a Cloudflare tunnel; sign-in required. Live link last updated 2026-11-09 22:35 UTC. If it doesn't load, the video below shows the same flow.</p>
+<p class="note">The live demo runs the full stack (Rust gateway, local Qwen3 model on a GPU, real PayPal <strong>Sandbox</strong>) behind a Cloudflare tunnel; sign-in required. Live link last updated 2026-11-09 23:29 UTC. If it doesn't load, the video below shows the same flow.</p>
 
 <video controls preload="metadata" poster="poster.png">
-<source src="quarantinepay-agent-demo.mp4" type="video/mp4">
-<track kind="captions" src="quarantinepay-agent-demo.en.vtt" srclang="en" label="English" default>
+<source src="quarantinepay-autonomous-demo.mp4" type="video/mp4">
+<track kind="captions" src="quarantinepay-autonomous-demo.en.vtt" srclang="en" label="English" default>
 </video>
 
 <h2>What the AI can and cannot do</h2>
 <div class="grid">
 <div class="card"><h3>Plans and negotiates</h3><p>A local model extracts budget and scope; the buyer's own written amount is a hard cap. Seller agents negotiate within budget and floors.</p></div>
-<div class="card"><h3>Proposes, never signs</h3><p>Only the buyer's approval of the exact contract hash creates a signed intent. Any change to the terms is refused.</p></div>
+<div class="card"><h3>Acts only inside a signed mandate</h3><p>Autonomous purchases must pass a deterministic mandate check (signature, cap, budget, seller, scope) under a lock. Anything outside it goes back to the buyer.</p></div>
 <div class="card"><h3>Adds caution, never removes it</h3><p>The AI analyst can flag manipulation or recommend rejection, but it can't lift a policy hold or move money.</p></div>
 <div class="card"><h3>Honest outcomes</h3><p>Uncertain or refused provider results become <code>reconciliation_required</code>, never a claimed success.</p></div>
 </div>
@@ -72,7 +72,9 @@ a{color:var(--mint)}
 <h2>Verified on live PayPal Sandbox (2026-11-09)</h2>
 <div class="table-wrap"><table>
 <tr><th>Story</th><th>What happened</th><th>PayPal (fresh API read)</th></tr>
-<tr><td>Compliant delivery</td><td>Checks pass, analyst low risk, buyer approves</td><td><span class="ok">CAPTURED</span> · capture <code>2P0047510S322170S</code> COMPLETED</td></tr>
+<tr><td>Autonomous purchase under a mandate</td><td>No approval click: mandate check passes, vault authorization, clean delivery auto-captured</td><td><span class="ok">CAPTURED</span> · capture <code>4M512246EX858693T</code> COMPLETED</td></tr>
+<tr><td>Autonomous purchase, injected delivery</td><td>Autonomy stops: policy hold, escalated to the buyer, rejected</td><td><span class="ok">VOIDED</span> · authorization <code>7UV96267LR272553S</code></td></tr>
+<tr><td>Compliant delivery (manual approval)</td><td>Checks pass, analyst low risk, buyer approves</td><td><span class="ok">CAPTURED</span> · capture <code>2P0047510S322170S</code> COMPLETED</td></tr>
 <tr><td>Prompt-injected delivery</td><td>Structure passes; rules and AI flag it; policy hold; buyer rejects</td><td><span class="ok">VOIDED</span> · authorization <code>0N41668771224050H</code></td></tr>
 <tr><td>Void after out-of-band capture</td><td>Gateway sees PayPal state <code>CAPTURED</code>, records a conflict, claims nothing</td><td>422 <code>PREVIOUSLY_CAPTURED</code> · authorization <code>4SM79001VH418320T</code></td></tr>
 <tr><td>Credential refusal on void</td><td>Real PayPal 401 leads to reconciliation, with the authorization preserved</td><td>Still <code>CREATED</code> until operator reconciliation</td></tr>
