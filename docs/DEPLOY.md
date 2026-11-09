@@ -12,6 +12,8 @@ scripts/public-tunnel.sh stop
 
 - The server stays bound to `127.0.0.1:3000`. Only the tunnel is public, and every mutation still needs the administrator password (bearer token, or session cookie plus the Origin check).
 - The script sets `QP_PUBLIC_BASE` to the tunnel URL. The browser Origin check, `Secure` cookies and the PayPal return URL all depend on it.
+- `scripts/public-tunnel.sh watch` (run it detached with `setsid nohup scripts/public-tunnel.sh watch &`) checks the public `/health` every 60 s. After two consecutive failures it restarts the server only, keeping the same URL, or restarts the tunnel and server if the tunnel itself is gone. Verified on 2026-11-09: after a simulated server crash (`kill -9`), the public URL recovered in 122 s.
+- **Stable entry point:** `scripts/publish-pages.sh <public-url>` publishes a static showcase (narrated video, evidence and screenshots) to the `gh-pages` branch, with an "Open live demo" button pointing at the current tunnel. The watchdog republishes it whenever the tunnel URL changes. Once GitHub Pages is enabled for `gh-pages` (repository Settings → Pages), `https://manvendersingh21.github.io/QuarantinePay/` is a permanent link for judges.
 - A quick tunnel is temporary: its URL changes whenever the tunnel restarts, and it serves only while the machine and processes run. Re-run `start` and update any shared link afterwards.
 - Verified on 2026-11-09: `scripts/sandbox-demo.cjs` ran both stories through the public HTTPS URL against live PayPal Sandbox in 152 s. The injected delivery's authorization `64L774879U300943H` is **VOIDED** and the compliant delivery's authorization `0EV5186317836644V` is **CAPTURED**, both confirmed by fresh PayPal API reads.
 
