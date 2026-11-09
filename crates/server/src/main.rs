@@ -1041,7 +1041,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/ui/agent", post(ui_agent))
         .route("/ui/catalog", post(ui_catalog))
         .route("/ui/catalog/sync",post(ui_catalog_sync))
-        .route("/paypal/return", get(|| async { Redirect::to("/") }))
+        .route("/paypal/return", get(|| async { Redirect::to("/agent") }))
         .layer(tower_http::set_header::SetResponseHeaderLayer::if_not_present(header::X_CONTENT_TYPE_OPTIONS, axum::http::HeaderValue::from_static("nosniff")))
         .layer(tower_http::set_header::SetResponseHeaderLayer::if_not_present(header::X_FRAME_OPTIONS, axum::http::HeaderValue::from_static("DENY")))
         .layer(tower_http::set_header::SetResponseHeaderLayer::if_not_present(header::REFERRER_POLICY, axum::http::HeaderValue::from_static("same-origin")))

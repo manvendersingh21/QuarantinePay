@@ -6,6 +6,8 @@ QuarantinePay makes autonomous commerce safe by separating what AI agents *recom
 
 A buyer types a request in plain English. A buyer agent plans it, gets quotes from three seller agents, and negotiates within the budget. The result is a canonical purchase contract. The buyer approves that exact contract by its SHA-256 digest. The approved contract is signed into an Ed25519 purchase intent, and only then does PayPal Sandbox *authorize* (hold) the funds. When the seller delivers, deterministic checks, an injection detector and a local AI analyst inspect the delivery. Capture happens only after explicit buyer approval. A failure, a rejection or a missed deadline voids the authorization.
 
+**Live demo:** https://deck-com-range-occasional.trycloudflare.com/agent (temporary Cloudflare quick-tunnel URL to the full stack with the local model and PayPal Sandbox; sign-in required) · **Video:** [`demo/quarantinepay-agent-demo.mp4`](demo/quarantinepay-agent-demo.mp4)
+
 > Hackathon prototype for the PayPal AI Hackathon. Sellers, goods, and deliveries are **fictional**. The default replay mode **simulates** payments, and no money moves. A result counts as confirmed only when PayPal Sandbox itself returns it. A hold is not escrow. The agent flow was verified on live PayPal Sandbox on 2026-11-09: a captured purchase and a voided injected delivery, both confirmed by fresh PayPal API reads. See [Verification status](#verification-status).
 
 ## The problem
@@ -92,7 +94,9 @@ The model endpoint must be a loopback address (`QP_LOCAL_LLM_BASE=http://127.0.0
 
 Set `QP_MODE=sandbox`, `PAYPAL_CLIENT_ID`, `PAYPAL_CLIENT_SECRET` and `PAYPAL_MERCHANT_ID`. The merchant ID is the 13-character ID of the *same* Sandbox business account. Approve the payment with a separate Sandbox **buyer** account. An HTTPS `QP_PUBLIC_BASE` and a `PAYPAL_WEBHOOK_ID` are only needed for webhooks; settlement does not depend on webhooks. Production endpoints are never used. Never enter real card data.
 
-**4. Hosted (Render)**: see [`render.yaml`](render.yaml) and [docs/DEPLOY.md](docs/DEPLOY.md). Render has no GPU, so hosted planning and analysis use the rule fallback.
+**4. Public demo (Cloudflare quick tunnel)**: `scripts/public-tunnel.sh start` publishes the full local stack (local model plus PayPal Sandbox) at a temporary `https://*.trycloudflare.com` URL; see [docs/DEPLOY.md](docs/DEPLOY.md).
+
+**5. Hosted (Render)**: see [`render.yaml`](render.yaml) and [docs/DEPLOY.md](docs/DEPLOY.md). Render has no GPU, so hosted planning and analysis use the rule fallback.
 
 ## The 3-minute demo
 
@@ -160,7 +164,8 @@ CI ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)) runs these checks, i
 | **Agent-contract flow against live PayPal Sandbox** (authorize, capture, void) | **Verified 2026-11-09.** Capture `2P0047510S322170S` COMPLETED; injected-delivery authorization `0N41668771224050H` VOIDED. Fresh PayPal API reads; see [docs/VALIDATION.md](docs/VALIDATION.md) |
 | Local Qwen3 planner and analyst on the agent flow | **Verified 2026-11-09** on a V100. Injected report: high risk, reject, policy hold. Compliant report: low risk, approve |
 | Failed void on live Sandbox | **Verified 2026-11-09.** Authorization `4SM79001VH418320T` was captured out of band; the buyer's reject led to `provider_state_conflict` and `reconciliation_required`, with no success claimed. PayPal itself refused the void with 422 `PREVIOUSLY_CAPTURED`. A 403 permission refusal is covered by a mocked test |
-| Render deployment | Blueprint provided; **not deployed or tested** |
+| Public deployment | **Live 2026-11-09** via Cloudflare quick tunnel at https://deck-com-range-occasional.trycloudflare.com (temporary URL). The full Sandbox demo passed through the public URL: void `64L774879U300943H` VOIDED, capture on `0EV5186317836644V` CAPTURED |
+| Render deployment | Blueprint provided; not deployed |
 
 Earlier testing saw a void refused with `403 PERMISSION_DENIED`. The app recorded `provider_permission_required`, moved the order to `reconciliation_required` and did not claim success. Any unresolved provider outcome is handled the same way.
 
