@@ -96,14 +96,14 @@ Set `QP_MODE=sandbox`, `PAYPAL_CLIENT_ID`, `PAYPAL_CLIENT_SECRET` and `PAYPAL_ME
 
 ## The 3-minute demo
 
-Full storyboard and pre-flight checklist: [docs/DEMO.md](docs/DEMO.md).
+**Watch:** [`demo/quarantinepay-agent-demo.mp4`](demo/quarantinepay-agent-demo.mp4) (2:22, narrated, English captions in [`demo/quarantinepay-agent-demo.en.srt`](demo/quarantinepay-agent-demo.en.srt)). The video was recorded on live PayPal Sandbox with the local Qwen3 model on 2026-11-09, and every payment state in it is provider-confirmed. The two Sandbox purchases appear in the video; waits for the model and for PayPal approval are cut, and the AI voice-over is generated. Full storyboard and pre-flight checklist: [docs/DEMO.md](docs/DEMO.md).
 
 1. `/agent`: paste the request above and watch planning and the negotiation transcript. Alder declines the scope, and the two remaining sellers settle within budget.
 2. Inspect the contract and its digest, then **approve the contract**.
 3. Approve at PayPal Sandbox, then authorize. The PayPal order ID and authorization ID appear in the PayPal panel.
 4. Seller simulator, **injected delivery**: structural checks pass, but the injection rules and the AI analyst flag it. The result is a **policy hold**. Approving without `acknowledge_risk` returns 409. Reject it, and the hold is voided with **$0 captured**.
 5. A second task with a **compliant delivery**, approved and captured via PayPal Sandbox.
-6. `/intelligence`: an AG Grid view of every transaction, with policy violations highlighted.
+6. `/intelligence`: an AG Grid view of every transaction. Captures made despite a flag, and buyer overrides, are highlighted as policy violations.
 
 ## API summary
 
