@@ -3,6 +3,7 @@ use crate::html::{
     Page, Shell, esc, humanize, minor, seg, shell, str_of, text, time_html, truncate, usd,
     usd_plain,
 };
+use crate::mandate;
 use serde_json::Value;
 
 pub const EXAMPLE_REQUEST: &str = "Find me a market research report on AI note-taking apps under $100 covering three competitors, including 5 credible sources";
@@ -49,6 +50,75 @@ fn done_through(p: &mut [Stage], n: usize) {
 
 fn chip(tone: &str, label: &str) -> String {
     format!(r#"<span class="chip tone-{tone}">{}</span>"#, esc(label))
+}
+
+fn autonomy_decision(task: &Value) -> &str {
+    str_of(&task["autonomy"]["decision"])
+}
+
+/// The order was authorized through the buyer's saved PayPal wallet under a spending mandate.
+fn is_mandate_order(order: &Value) -> bool {
+    !str_of(&order["mandate_id"]).is_empty()
+}
+
+fn event_matches(e: &Value, task: &Value, kind: &str) -> bool {
+    if str_of(&e["kind"]) != kind {
+        return false;
+    }
+    let order_id = str_of(&task["order"]["id"]);
+    let task_id = str_of(&task["id"]);
+    let is = |v: &Value, id: &str| !id.is_empty() && str_of(v) == id;
+    is(&e["order_id"], order_id)
+        || is(&e["detail"]["order_id"], order_id)
+        || is(&e["task_id"], task_id)
+        || is(&e["detail"]["task_id"], task_id)
+}
+
+/// The capture happened (or is happening) without a buyer decision because the mandate's
+/// auto-capture policy was satisfied.
+fn auto_captured(task: &Value, events: &[Value]) -> bool {
+    let order = &task["order"];
+    is_mandate_order(order)
+        && matches!(str_of(&order["state"]), "capture_pending" | "captured")
+        && text(&order["review_decision"]).is_empty()
+        && order["risk_override"].as_bool() != Some(true)
+        && (task["proposal"]["buyer_review_required"].as_bool() == Some(false)
+            || events
+                .iter()
+                .any(|e| event_matches(e, task, "auto_capture_policy_satisfied")))
+}
+
+/// A mandate order that the auto-capture policy handed back to the buyer.
+fn escalated(task: &Value) -> bool {
+    let order = &task["order"];
+    is_mandate_order(order)
+        && str_of(&order["state"]) == "buyer_review"
+        && task["proposal"]["buyer_review_required"].as_bool() != Some(true)
+}
+
+/// Mandate-specific stage labels layered over the generic pipeline progress.
+fn autonomy_labels(p: &mut [Stage], task: &Value, events: &[Value]) {
+    match autonomy_decision(task) {
+        "auto_approved" if p[4].status == St::Done => {
+            p[4].label = "Approved by your mandate".into()
+        }
+        "outside_mandate" if p[4].status == St::Active => {
+            p[4].label = "Outside mandate · your decision".into()
+        }
+        _ => {}
+    }
+    if is_mandate_order(&task["order"]) {
+        match p[5].status {
+            St::Done => p[5].label = "Saved wallet · no click".into(),
+            St::Active => p[5].label = "Authorizing via saved wallet".into(),
+            _ => {}
+        }
+    }
+    if auto_captured(task, events) && p[8].status == St::Done {
+        p[8].label = "Captured automatically".into();
+    } else if escalated(task) {
+        p[8].label = "Escalated to you".into();
+    }
 }
 
 fn policy_hold(order: &Value) -> bool {
@@ -262,6 +332,16 @@ fn yes_no(v: &Value) -> String {
         Some(true) => "Yes".into(),
         Some(false) => "No".into(),
         None => "—".into(),
+    }
+}
+
+fn review_required(c: &Value) -> String {
+    match (
+        c["buyer_review_required"].as_bool(),
+        str_of(&c["mandate_id"]).is_empty(),
+    ) {
+        (Some(false), false) => "No · clean deliveries auto-capture under your mandate".into(),
+        _ => yes_no(&c["buyer_review_required"]),
     }
 }
 
@@ -485,10 +565,17 @@ fn contract(task: &Value) -> String {
             "HTTPS sources required",
             yes_no(&c["require_https_sources"]),
         ),
-        ("Buyer review required", yes_no(&c["buyer_review_required"])),
+        ("Buyer review required", review_required(c)),
         ("Seller ID", or_dash(&c["seller_id"])),
         ("Kind", or_dash(&c["kind"])),
     ]));
+    let mandate_id = text(&c["mandate_id"]);
+    if !mandate_id.is_empty() {
+        h.push_str(&format!(
+            r#"<p class="muted small">Bound to spending mandate <code class="inline-digest">{}</code>; the mandate can only narrow this contract, never widen it.</p>"#,
+            esc(&truncate(&mandate_id, 24))
+        ));
+    }
     let negotiation_digest = text(&c["negotiation_digest"]);
     if !negotiation_digest.is_empty() {
         h.push_str(&format!(
@@ -507,7 +594,78 @@ fn contract(task: &Value) -> String {
     h
 }
 
+fn rule_list(items: &Value, ok: bool) -> String {
+    let items: Vec<String> = items
+        .as_array()
+        .map(|a| a.iter().map(text).filter(|t| !t.is_empty()).collect())
+        .unwrap_or_default();
+    if items.is_empty() {
+        return String::new();
+    }
+    let (cls, label, icon) = if ok {
+        ("ok", "passed", "✓")
+    } else {
+        ("fail", "violated", "✗")
+    };
+    let mut h = String::from(r#"<ul class="checklist mandate-rules">"#);
+    for item in items {
+        h.push_str(&format!(
+            r#"<li class="{cls}"><span class="check-icon" aria-label="{label}">{icon}</span><div><span>{}</span></div></li>"#,
+            esc(&item)
+        ));
+    }
+    h.push_str("</ul>");
+    h
+}
+
+fn mandate_budget_line(autonomy: &Value) -> String {
+    match (
+        minor(&autonomy["committed_minor"]),
+        minor(&autonomy["remaining_minor"]),
+    ) {
+        (None, None) => String::new(),
+        (c, r) => format!(
+            r#"<p class="mandate-budget-line"><strong>{}</strong> remaining on your mandate · {} committed</p>"#,
+            r.map(usd).unwrap_or_else(|| "—".into()),
+            c.map(usd).unwrap_or_else(|| "—".into()),
+        ),
+    }
+}
+
 fn approval(task: &Value, replay: bool) -> String {
+    let autonomy = &task["autonomy"];
+    let state = str_of(&task["state"]);
+    match autonomy_decision(task) {
+        "auto_approved" if !matches!(state, "awaiting_approval" | "cancelled") => {
+            let digest = text(&task["proposal_digest"]);
+            let mut h = String::from(
+                r#"<p class="autonomy-note"><strong>No human click was needed.</strong> The agent could only sign this intent because every mandate rule passed.</p><span class="eyebrow">MANDATE RULES CHECKED</span>"#,
+            );
+            h.push_str(&rule_list(&autonomy["checked"], true));
+            h.push_str(&mandate_budget_line(autonomy));
+            if !digest.is_empty() {
+                h.push_str(&format!(
+                    r#"<p class="muted small">Signed intent bound to contract digest <code class="inline-digest">{}</code>.</p>"#,
+                    esc(&truncate(&digest, 20))
+                ));
+            }
+            h
+        }
+        "outside_mandate" => {
+            let mut h = String::from(if state == "awaiting_approval" {
+                r#"<div class="banner warn-banner"><strong>✋</strong><p>Outside your mandate — your approval is required.</p></div>"#
+            } else {
+                r#"<p class="muted small">This proposal was outside your mandate, so it could not be bought autonomously.</p>"#
+            });
+            h.push_str(&rule_list(&autonomy["reasons"], false));
+            h.push_str(&manual_approval(task, replay));
+            h
+        }
+        _ => manual_approval(task, replay),
+    }
+}
+
+fn manual_approval(task: &Value, replay: bool) -> String {
     let id = seg(str_of(&task["id"]));
     let digest = text(&task["proposal_digest"]);
     let amount = minor(&task["proposal"]["amount_minor"]);
@@ -569,6 +727,9 @@ fn provider_label(order: &Value, replay: bool) -> String {
     match state {
         "authorized" | "quarantined" | "buyer_review" | "captured" | "voided" => {
             chip("good", "PayPal Sandbox · provider-confirmed")
+        }
+        "approval_pending" if is_mandate_order(order) => {
+            chip("info", "PayPal Sandbox · authorizing via saved wallet")
         }
         "approval_pending" => chip("info", "PayPal Sandbox · awaiting your approval at PayPal"),
         "declined" => chip("bad", "PayPal Sandbox · authorization not granted"),
@@ -655,7 +816,27 @@ fn payment(task: &Value, replay: bool) -> String {
             format!(r#"<code>{}</code>"#, or_dash(&order["id"])),
         ),
     ]));
-    if state == "approval_pending" {
+    if is_mandate_order(order) {
+        let simulated = order_is_replay(order, replay);
+        let note = match (held, simulated) {
+            (true, false) => {
+                "Authorized through your saved PayPal wallet (vault) — no checkout click"
+            }
+            (true, true) => {
+                "Simulated vault authorization under your mandate — no checkout click, not provider-confirmed"
+            }
+            (false, _) if state == "declined" => {
+                "PayPal did not authorize the saved-wallet payment; nothing is held"
+            }
+            (false, _) => {
+                "Authorizing through your saved PayPal wallet (vault) — no checkout click"
+            }
+        };
+        h.push_str(&format!(
+            r#"<p class="vault-note"><span class="chip tone-good">Mandate</span>{}</p>"#,
+            esc(note)
+        ));
+    } else if state == "approval_pending" {
         h.push_str(r#"<div class="actions">"#);
         if order_is_replay(order, replay) {
             h.push_str(&format!(
@@ -885,17 +1066,23 @@ fn verification(task: &Value) -> String {
     h
 }
 
-fn settlement(task: &Value) -> String {
+fn settlement(task: &Value, events: &[Value]) -> String {
     let order = &task["order"];
     let state = str_of(&order["state"]);
     let id = seg(str_of(&order["id"]));
     let amount = order_amount(task)
         .map(usd_plain)
         .unwrap_or_else(|| "agreed amount".into());
+    let auto = auto_captured(task, events);
     let mut h = String::new();
     match state {
         "buyer_review" => {
             let action = format!("/ui/orders/{id}/review");
+            if escalated(task) {
+                h.push_str(r#"<div class="banner warn-banner escalation"><strong>⤴</strong><p><strong>Escalated to you: the delivery did not meet the auto-capture policy.</strong> Your mandate only auto-captures deliveries that pass every check, carry no policy hold and that the analyst rates low-risk.</p></div>"#);
+            } else if is_mandate_order(order) {
+                h.push_str(r#"<p class="muted small">Your mandate does not auto-capture, so every delivery waits for your decision.</p>"#);
+            }
             if policy_hold(order) {
                 h.push_str(&format!(
                     concat!(
@@ -920,6 +1107,11 @@ fn settlement(task: &Value) -> String {
                 ));
             }
         }
+        "captured" if auto => h.push_str(&format!(
+            r#"<div class="outcome good"><strong>Captured {} automatically</strong><p>Captured automatically: all checks passed, no hold, analyst low-risk.</p></div>"#,
+            esc(&amount)
+        )),
+        "capture_pending" if auto => h.push_str(r#"<p class="working">Capturing automatically: all checks passed, no hold, analyst low-risk. Waiting for the provider to confirm.</p>"#),
         "captured" => h.push_str(&format!(
             r#"<div class="outcome good"><strong>Captured {}</strong><p>Funds were paid to the fictional seller after the delivery was verified and approved.</p></div>"#,
             esc(&amount)
@@ -970,8 +1162,9 @@ const STEP_TITLES: [&str; 9] = [
     "Settlement",
 ];
 
-fn pipeline(task: &Value, replay: bool) -> String {
-    let stages = progress(task);
+fn pipeline(task: &Value, replay: bool, events: &[Value]) -> String {
+    let mut stages = progress(task);
+    autonomy_labels(&mut stages, task, events);
     let bodies = [
         understand(task),
         discover(task),
@@ -981,7 +1174,7 @@ fn pipeline(task: &Value, replay: bool) -> String {
         payment(task, replay),
         delivery(task),
         verification(task),
-        settlement(task),
+        settlement(task, events),
     ];
     let mut h = String::from(r#"<ol class="pipeline">"#);
     for (i, ((title, st), body)) in STEP_TITLES.iter().zip(&stages).zip(bodies).enumerate() {
@@ -1011,10 +1204,20 @@ fn pipeline(task: &Value, replay: bool) -> String {
     h
 }
 
-fn task_detail(task: &Value, replay: bool) -> String {
+fn authority_chip(task: &Value) -> String {
+    let under_mandate = !str_of(&task["mandate_id"]).is_empty();
+    match autonomy_decision(task) {
+        "outside_mandate" => chip("warn", "Manual approval · outside mandate"),
+        _ if under_mandate => chip("ai", "Autonomous · mandate"),
+        _ => chip("neutral", "Manual approval"),
+    }
+}
+
+fn task_detail(task: &Value, replay: bool, events: &[Value]) -> String {
     let error = text(&task["error"]);
     let mut h = format!(
-        r#"<section class="panel task-head"><div class="task-head-top"><span class="eyebrow">BUYER REQUEST</span>{}</div><blockquote class="request-quote">{}</blockquote><p class="muted small task-meta"><code>{}</code>{}{}</p>"#,
+        r#"<section class="panel task-head"><div class="task-head-top"><span class="eyebrow">BUYER REQUEST</span><div class="chips head-chips">{}{}</div></div><blockquote class="request-quote">{}</blockquote><p class="muted small task-meta"><code>{}</code>{}{}</p>"#,
+        authority_chip(task),
         task_state_chip(str_of(&task["state"])),
         esc(&text(&task["request"])),
         or_dash(&task["id"]),
@@ -1036,7 +1239,7 @@ fn task_detail(task: &Value, replay: bool) -> String {
         ));
     }
     h.push_str("</section>");
-    h.push_str(&pipeline(task, replay));
+    h.push_str(&pipeline(task, replay, events));
     h
 }
 
@@ -1060,6 +1263,9 @@ fn task_list(tasks: &[Value], selected_id: &str) -> String {
             }
             if let Some(a) = minor(&t["amount_minor"]) {
                 meta.push(usd(a));
+            }
+            if !str_of(&t["mandate_id"]).is_empty() {
+                meta.push("Autonomous".into());
             }
             h.push_str(&format!(
                 r#"<li><a class="task-item{}" href="/agent/{}"{}><div class="task-item-top">{}{}</div><p>{}</p>{}</a></li>"#,
@@ -1113,6 +1319,14 @@ fn event_label(kind: &str) -> String {
         "agent_failed" | "agent_task_failed" => "Agent task failed",
         "delivery_analyzed" | "analysis_completed" | "agent_analysis" => "AI analyst finished",
         "risk_override" | "policy_override" => "Policy hold overridden by buyer",
+        "mandate_created" => "Spending mandate signed",
+        "mandate_activated" => "Mandate active · PayPal wallet saved",
+        "mandate_verification_voided" => "USD 1.00 verification hold voided",
+        "mandate_revoked" => "Mandate revoked",
+        "mandate_policy_check" => "Mandate policy check",
+        "agent_autonomous_purchase" => "Autonomous purchase · intent signed under mandate",
+        "auto_capture_policy_satisfied" => "Auto-capture policy satisfied",
+        "escalated_to_buyer" => "Escalated to buyer",
         _ => "",
     };
     if !known.is_empty() {
@@ -1126,6 +1340,15 @@ fn event_label(kind: &str) -> String {
 }
 
 fn event_tone(kind: &str) -> &'static str {
+    match kind {
+        "mandate_created"
+        | "mandate_activated"
+        | "mandate_verification_voided"
+        | "auto_capture_policy_satisfied" => return "good",
+        "mandate_policy_check" | "agent_autonomous_purchase" => return "ai",
+        "mandate_revoked" | "escalated_to_buyer" => return "warn",
+        _ => {}
+    }
     let k = kind.to_ascii_lowercase();
     if [
         "fail", "reject", "void", "inject", "override", "reconcil", "declin", "red",
@@ -1186,29 +1409,46 @@ fn activity(events: &[Value]) -> String {
     h
 }
 
-fn request_box() -> String {
+fn request_box(active_mandate: Option<&Value>) -> String {
+    let (autonomy, foot) = match active_mandate {
+        Some(m) => (
+            format!(
+                r#"<label class="check use-mandate"><input type="checkbox" name="use_mandate" value="{}" checked/><span>Buy autonomously under my mandate (no approval clicks if within limits)</span></label>"#,
+                esc(str_of(&m["id"]))
+            ),
+            "Budget and scope are extracted, then clamped by policy. Sellers are fictional and deliveries are simulated. Under your mandate the agent signs only contracts inside its limits; anything else waits for your approval, and nothing is captured until the delivery is verified.",
+        ),
+        None => (
+            String::new(),
+            "Budget and scope are extracted, then clamped by policy. Sellers are fictional and deliveries are simulated. Nothing is paid until you approve an exact contract and the delivery is verified.",
+        ),
+    };
     format!(
         concat!(
             r#"<section class="panel request-box"><form method="post" action="/ui/agent/tasks">"#,
             r#"<label for="agent-request"><span class="eyebrow">NEW BUYER TASK</span><h2>What should the buyer agent buy?</h2></label>"#,
-            r#"<textarea id="agent-request" name="request" maxlength="2000" rows="3" required>{}</textarea>"#,
-            r#"<div class="request-foot"><p class="muted small">Budget and scope are extracted, then clamped by policy. Sellers are fictional and deliveries are simulated. Nothing is paid until you approve an exact contract and the delivery is verified.</p>"#,
+            r#"<textarea id="agent-request" name="request" maxlength="2000" rows="3" required>{}</textarea>{}"#,
+            r#"<div class="request-foot"><p class="muted small">{}</p>"#,
             r#"<button class="primary-lg">Run buyer agent</button></div></form></section>"#
         ),
-        esc(EXAMPLE_REQUEST)
+        esc(EXAMPLE_REQUEST),
+        autonomy,
+        foot
     )
 }
 
 fn empty_detail() -> String {
-    r#"<section class="panel empty-state"><span class="eyebrow">NO TASK SELECTED</span><h2>Bounded authority, end to end</h2><ol class="how"><li><strong>You describe</strong> what you need and your budget.</li><li><strong>The agent negotiates</strong> with three fictional sellers and compiles a canonical contract.</li><li><strong>You approve</strong> the exact contract digest; PayPal places an authorization hold.</li><li><strong>The delivery is verified</strong> by contract checks and an advisory AI analyst before anything is captured.</li></ol></section>"#.into()
+    r#"<section class="panel empty-state"><span class="eyebrow">NO TASK SELECTED</span><h2>Bounded authority, end to end</h2><ol class="how"><li><strong>You describe</strong> what you need and your budget.</li><li><strong>The agent negotiates</strong> with three fictional sellers and compiles a canonical contract.</li><li><strong>You approve</strong> the exact contract digest; PayPal places an authorization hold.</li><li><strong>The delivery is verified</strong> by contract checks and an advisory AI analyst before anything is captured.</li></ol><p class="muted small">Or sign a <strong>spending mandate</strong>: approve once at PayPal Sandbox to save your wallet, and the agent buys within your limits without further clicks. Only clean, low-risk deliveries are captured automatically; anything else is escalated to you.</p></section>"#.into()
 }
 
+#[allow(clippy::too_many_arguments)] // Flat signature shared with the server handler.
 pub fn render_agent(
     mode: String,
     inference_label: String,
     tasks: Vec<Value>,
     selected: Option<Value>,
     events: Vec<Value>,
+    mandates: Vec<Value>,
     logged_in: bool,
     message: String,
 ) -> String {
@@ -1224,12 +1464,13 @@ pub fn render_agent(
         .map(|t| str_of(&t["id"]).to_string())
         .unwrap_or_default();
     let detail = match &selected {
-        Some(task) => task_detail(task, replay),
+        Some(task) => task_detail(task, replay, &events),
         None => empty_detail(),
     };
     let content = format!(
-        r#"{}<div class="agent-layout"><div class="task-detail">{}</div><div class="agent-side">{}{}</div></div>"#,
-        request_box(),
+        r#"<div class="agent-top">{}{}</div><div class="agent-layout"><div class="task-detail">{}</div><div class="agent-side">{}{}</div></div>"#,
+        request_box(mandate::active(&mandates)),
+        mandate::panel(&mandates, replay),
         detail,
         task_list(&tasks, &selected_id),
         activity(&events),
@@ -1259,6 +1500,15 @@ mod tests {
     use serde_json::json;
 
     fn page(mode: &str, task: Value) -> String {
+        page_with(mode, task, vec![], vec![])
+    }
+
+    fn page_with(mode: &str, task: Value, mandates: Vec<Value>, extra: Vec<Value>) -> String {
+        let mut events = vec![
+            json!({"id": 7, "kind": "agent_contract_proposed", "detail": {"seller": "Alder Insights"}, "at": "2026-11-09T10:00:02Z"}),
+            json!({"id": 9, "kind": "authorized", "detail": "hold placed", "at": "2026-11-09T10:00:05Z", "order_id": "order-1"}),
+        ];
+        events.extend(extra);
         render_agent(
             mode.into(),
             "Local inference".into(),
@@ -1266,10 +1516,8 @@ mod tests {
                 json!({"id": task["id"], "request": task["request"], "state": task["state"], "created_at": "2026-11-09T10:00:00Z", "amount_minor": 5340, "seller": "Alder Insights"}),
             ],
             Some(task),
-            vec![
-                json!({"id": 7, "kind": "agent_contract_proposed", "detail": {"seller": "Alder Insights"}, "at": "2026-11-09T10:00:02Z"}),
-                json!({"id": 9, "kind": "authorized", "detail": "hold placed", "at": "2026-11-09T10:00:05Z", "order_id": "order-1"}),
-            ],
+            events,
+            mandates,
             true,
             String::new(),
         )
@@ -1439,6 +1687,10 @@ mod tests {
             vec![json!(null)],
             None,
             vec![json!(1)],
+            vec![
+                json!(null),
+                json!({"state": "active", "mandate": "x", "committed_minor": "y"}),
+            ],
             true,
             "Done".into(),
         );
@@ -1448,6 +1700,7 @@ mod tests {
             "x".into(),
             vec![],
             None,
+            vec![],
             vec![],
             false,
             String::new(),
@@ -1477,5 +1730,202 @@ mod tests {
             json!({"state": "purchasing", "order": {"state": "buyer_review", "verification": {"passed": true}, "analysis": {"policy_hold": true}}}),
         );
         assert_eq!(hold[7..], [Blocked, Active]);
+    }
+
+    fn mandate(state: &str) -> Value {
+        json!({
+            "id": "mandate-1", "state": state,
+            "digest": "9f2c0a7be41d5c3f8a6b2e1d0c9f8e7d6c5b4a3928170615f4e3d2c1b0a99887",
+            "approval_url": "https://www.sandbox.paypal.com/checkoutnow?token=VAULT1",
+            "mandate": {
+                "max_per_purchase_minor": 6000, "max_total_minor": 15000,
+                "allowed_sellers": ["northstar", "alder", "quillfire"],
+                "min_competitors": 3, "min_sources": 5, "auto_capture_clean": true,
+                "created_at": 1_762_682_400, "expires_at": 1_762_768_800
+            },
+            "committed_minor": 4900, "remaining_minor": 10100, "purchases": 1,
+            "vault_saved": state == "active", "created_at": 1_762_682_400, "revoked_at": null
+        })
+    }
+
+    fn agent_page(mode: &str, mandates: Vec<Value>) -> String {
+        render_agent(
+            mode.into(),
+            "Local".into(),
+            vec![],
+            None,
+            vec![],
+            mandates,
+            true,
+            String::new(),
+        )
+    }
+
+    #[test]
+    fn mandate_panel_states() {
+        let none = agent_page("SANDBOX", vec![mandate("revoked")]);
+        assert!(none.contains(r#"action="/ui/mandates""#));
+        for input in [
+            r#"name="max_per_purchase_usd" value="60""#,
+            r#"name="max_total_usd" value="150""#,
+            r#"name="hours" value="24" min="1" max="168""#,
+            r#"<input type="checkbox" name="auto_capture_clean" value="true" checked/>"#,
+        ] {
+            assert!(none.contains(input), "missing {input}");
+        }
+        assert!(
+            none.contains(
+                "Auto-capture only clean, low-risk deliveries (anything else waits for me)"
+            )
+        );
+        assert!(none.contains("Sign spending mandate"));
+        assert!(none.contains("a USD 1.00 verification hold, voided immediately"));
+        assert!(none.contains("Northstar Research, Alder Insights, Quillfire Analytics"));
+        assert!(none.contains(r#"class="mandate-history""#) && none.contains("Revoked"));
+        assert!(!none.contains("use_mandate"));
+
+        let pending = agent_page("SANDBOX", vec![mandate("pending_vault")]);
+        assert!(pending.contains("Approve at PayPal Sandbox"));
+        assert!(pending.contains(r#"href="https://www.sandbox.paypal.com/checkoutnow?token=VAULT1" target="_blank" rel="noopener noreferrer""#));
+        assert!(pending.contains(r#"action="/ui/mandates/mandate-1/activate""#));
+        assert!(pending.contains("I approved — activate mandate"));
+        assert!(
+            pending.contains("9f2c0a7be41d5c3f8a6b2e1d0c9f8e7d6c5b4a3928170615f4e3d2c1b0a99887")
+        );
+        assert!(pending.contains("$60.00") && pending.contains("$150.00"));
+        assert!(!pending.contains(r#"action="/ui/mandates""#) && !pending.contains("use_mandate"));
+        let mut hostile = mandate("pending_vault");
+        hostile["approval_url"] = json!("javascript:alert(1)");
+        assert!(!agent_page("SANDBOX", vec![hostile]).contains("javascript:"));
+        let replay = agent_page("REPLAY", vec![mandate("pending_vault")]);
+        assert!(replay.contains("Activate simulated mandate"));
+        assert!(!replay.contains("Approve at PayPal Sandbox"));
+
+        let active = agent_page("SANDBOX", vec![mandate("revoked"), mandate("active")]);
+        assert!(active.contains(r#"<progress class="budget-meter" value="4900" max="15000""#));
+        assert!(active.contains(r#"data-deadline="2025-11-10T10:00:00Z""#));
+        assert!(active.contains("PayPal wallet saved"));
+        assert!(active.contains(r#"action="/ui/mandates/mandate-1/revoke""#));
+        assert!(active.contains("Revoke mandate"));
+        assert!(active.contains("$101.00") && active.contains("$49.00 committed"));
+        assert!(
+            active.contains(
+                r#"<input type="checkbox" name="use_mandate" value="mandate-1" checked/>"#
+            )
+        );
+        assert!(
+            active.contains(
+                "Buy autonomously under my mandate (no approval clicks if within limits)"
+            )
+        );
+        assert!(active.contains(r#"action="/ui/agent/tasks""#));
+        assert!(!active.contains("Sign spending mandate"));
+        assert!(!active.contains(" style=") && !active.contains("<script>"));
+
+        let mut quoted = mandate("active");
+        quoted["id"] = json!(r#"m"><b>x"#);
+        let quoted = agent_page("SANDBOX", vec![quoted]);
+        assert!(quoted.contains(r#"value="m&quot;&gt;&lt;b&gt;x""#));
+        assert!(quoted.contains(r#"action="/ui/mandates/m%22%3E%3Cb%3Ex/revoke""#));
+    }
+
+    fn mandate_order_task(state: &str) -> Value {
+        let mut task = reviewed_task("SANDBOX", state);
+        task["mandate_id"] = json!("mandate-1");
+        task["proposal"]["mandate_id"] = json!("mandate-1");
+        task["proposal"]["buyer_review_required"] = json!(false);
+        task["order"]["mandate_id"] = json!("mandate-1");
+        task["autonomy"] = json!({
+            "decision": "auto_approved",
+            "reasons": [],
+            "checked": ["Price within the USD 60.00 per-purchase cap", "Seller Alder Insights is allowed"],
+            "committed_minor": 4900, "remaining_minor": 10100
+        });
+        task
+    }
+
+    #[test]
+    fn auto_approved_task_needs_no_click() {
+        for state in ["authorized", "approval_pending"] {
+            let mut task = mandate_order_task(state);
+            task["order"]["artifact"] = Value::Null;
+            task["order"]["verification"] = Value::Null;
+            task["order"]["analysis"] = Value::Null;
+            let html = page("SANDBOX", task);
+            assert!(html.contains("Approved by your mandate"));
+            assert!(html.contains("No human click was needed"));
+            assert!(html.contains("Seller Alder Insights is allowed"));
+            assert!(html.contains("$101.00"));
+            assert!(html.contains("Autonomous · mandate"));
+            assert!(!html.contains("Approve at PayPal Sandbox"));
+            assert!(!html.contains("/authorize"));
+            assert!(!html.contains(r#"action="/ui/agent/tasks/task-1/approve""#));
+        }
+        let html = page("SANDBOX", {
+            let mut t = mandate_order_task("authorized");
+            t["order"]["artifact"] = Value::Null;
+            t
+        });
+        assert!(
+            html.contains(
+                "Authorized through your saved PayPal wallet (vault) — no checkout click"
+            )
+        );
+        assert!(html.contains("Saved wallet · no click"));
+        assert!(html.contains("No · clean deliveries auto-capture under your mandate"));
+    }
+
+    #[test]
+    fn outside_mandate_lists_reasons_and_asks_for_approval() {
+        let mut task = proposed_task();
+        task["mandate_id"] = json!("mandate-1");
+        task["autonomy"] = json!({
+            "decision": "outside_mandate",
+            "reasons": ["price USD 64.00 exceeds the per-purchase cap USD 60.00"],
+            "checked": [], "committed_minor": 0, "remaining_minor": 15000
+        });
+        let html = page("SANDBOX", task);
+        assert!(html.contains("Outside your mandate — your approval is required."));
+        assert!(html.contains("price USD 64.00 exceeds the per-purchase cap USD 60.00"));
+        assert!(html.contains(
+            r#"<li class="fail"><span class="check-icon" aria-label="violated">✗</span>"#
+        ));
+        assert!(html.contains(r#"action="/ui/agent/tasks/task-1/approve""#));
+        assert!(html.contains(r#"action="/ui/agent/tasks/task-1/cancel""#));
+        assert!(html.contains("Manual approval · outside mandate"));
+        assert!(!html.contains("Approved by your mandate"));
+        assert!(page("SANDBOX", proposed_task()).contains(">Manual approval<"));
+    }
+
+    #[test]
+    fn mandate_settlement_escalates_or_auto_captures() {
+        let html = page("SANDBOX", mandate_order_task("buyer_review"));
+        assert!(
+            html.contains("Escalated to you: the delivery did not meet the auto-capture policy")
+        );
+        assert!(html.contains("acknowledge_risk"));
+        assert!(html.contains(r#"action="/ui/orders/order-1/review""#));
+        assert!(
+            !page("SANDBOX", reviewed_task("SANDBOX", "buyer_review")).contains("Escalated to you")
+        );
+
+        let mut clean = mandate_order_task("captured");
+        clean["order"]["analysis"]["policy_hold"] = json!(false);
+        let captured = page("SANDBOX", clean.clone());
+        assert!(
+            captured
+                .contains("Captured automatically: all checks passed, no hold, analyst low-risk.")
+        );
+        // With buyer review in the contract, only the audited event proves an automatic capture.
+        clean["proposal"]["buyer_review_required"] = json!(true);
+        assert!(!page("SANDBOX", clean.clone()).contains("Captured automatically"));
+        let event = json!({"id": 11, "kind": "auto_capture_policy_satisfied", "order_id": "order-1", "detail": {}, "at": "2026-11-09T10:02:00Z"});
+        let html = page_with("SANDBOX", clean.clone(), vec![], vec![event]);
+        assert!(
+            html.contains("Captured automatically: all checks passed, no hold, analyst low-risk.")
+        );
+        assert!(html.contains("Auto-capture policy satisfied"));
+        clean["order"]["review_decision"] = json!("approve");
+        assert!(!page("SANDBOX", clean).contains("Captured automatically"));
     }
 }

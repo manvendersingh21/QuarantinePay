@@ -23,6 +23,17 @@ AI agents are starting to buy things. Today an agent that can call a payment API
 5. **Quarantine.** The seller delivers a Markdown report. The app runs deterministic checks (sections, distinct competitors, distinct HTTPS sources, `.md`, 64 KiB) and untrusted-instruction detection, and the AI analyst reviews it.
 6. **Settle.** A failed check leads to a **void**. A pass goes to **buyer review**. Any injection finding triggers a **policy hold**: approval then needs an explicit, audited `acknowledge_risk`. Capture uses a stable `PayPal-Request-Id`.
 
+### Autonomous mode: buy without clicking, never without limits
+
+You sign a **spending mandate** once: a per-purchase cap, a total budget, allowed sellers, minimum scope, an expiry of up to 7 days, and whether clean deliveries may auto-capture. One PayPal Sandbox approval saves (vaults) your PayPal wallet. QuarantinePay voids the USD 1.00 verification hold immediately.
+
+From then on the agent can buy **with no human click**:
+
+- **Before payment:** it negotiates within your cap and compiles the contract. A deterministic mandate check runs under a row lock covering the signature, expiry, seller, cap, cumulative budget and scope. The agent then signs the intent, and PayPal authorizes the order from the vaulted wallet. The money is held, not paid.
+- **Capture:** happens automatically **only** if every contract check passes, there is no policy hold, and the model analyst rates the delivery low-risk with "approve". Anything else escalates to you. A purchase outside the mandate falls back to normal approval, with the violated rules listed. A revoked or tampered mandate authorizes nothing.
+
+Verified live on PayPal Sandbox on 2026-11-09: a clean purchase was auto-captured, and an injected one was escalated and voided ([docs/VALIDATION.md](docs/VALIDATION.md)).
+
 ## Architecture
 
 ```
@@ -124,6 +135,10 @@ Authenticate with `Authorization: Bearer <QP_ADMIN_PASSWORD>`, or with the brows
 | `POST /api/orders/{id}/review` `{"decision", "acknowledge_risk"?}` | Approve (capture) or reject (void). Returns 409 `policy hold` without acknowledgement |
 | `GET /api/orders/{id}` | Order state, verification, `analysis`, `risk_override` |
 | `GET /api/analytics/transactions` | Read-only rows and a summary for the intelligence grid |
+| `POST /api/mandates` | Sign a spending mandate `{max_per_purchase_usd, max_total_usd, hours, auto_capture_clean}`. Returns the PayPal approval link that saves the wallet |
+| `GET /api/mandates` | Mandates with committed and remaining budget |
+| `POST /api/mandates/{id}/activate` · `/revoke` | Activate after PayPal approval (vaults the wallet, voids the USD 1.00 verification hold), or revoke |
+| `POST /api/agent/tasks` with `mandate_id` | Let the agent buy autonomously within the mandate |
 | `GET /api/events?after=` | Server-sent audit events |
 | `GET /api/scenarios`, `POST /api/intents`, `POST /api/checkout` | Earlier fixed five-scenario catalog flow (still available) |
 | `GET /health` | Liveness |
@@ -167,6 +182,7 @@ CI ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)) runs these checks, i
 | Public deployment | **Live 2026-11-09** via Cloudflare quick tunnel at https://deck-com-range-occasional.trycloudflare.com (temporary URL). The full Sandbox demo passed through the public URL: void `64L774879U300943H` VOIDED, capture on `0EV5186317836644V` CAPTURED |
 | Render deployment | Blueprint provided; not deployed. The Docker image is unbuilt because containers cannot run on the dev host; the Dockerfile steps were replicated natively and smoke-tested |
 | Live provider credential refusal on void | **Verified 2026-11-09**: a real PayPal `401 invalid_client` led to `provider_permission_required` and `reconciliation_required`, with the authorization preserved and no success claimed |
+| **Autonomous purchasing under a spending mandate** (vaulted wallet, no click) | **Verified 2026-11-09.** Mandate verification hold `2BH67756TV9096707` VOIDED. Clean purchase: capture `04H014221M4877141` COMPLETED (USD 47.25) with no human click. Injected purchase: escalated, rejected, `2G8288073K521383A` VOIDED. The `mandate_flow` test covers budget exhaustion, tampering and revocation |
 | Live PayPal **403** permission refusal on void | **Verified 2026-11-09**: with a second Sandbox merchant as payee, PayPal returned `403 NOT_AUTHORIZED / PERMISSION_DENIED`. The result was `provider_permission_required` and `reconciliation_required`, with the authorization `4VW92416K3021363U` preserved and still `CREATED` at PayPal |
 
 Earlier testing saw a void refused with `403 PERMISSION_DENIED`. The app recorded `provider_permission_required`, moved the order to `reconciliation_required` and did not claim success. Any unresolved provider outcome is handled the same way.

@@ -185,6 +185,94 @@ impl PayPal {
    "payment_source":{"paypal":{"experience_context":{"return_url":format!("{base}/paypal/return"),"cancel_url":format!("{base}/"),"user_action":"PAY_NOW"}}}
   })),request_id).await
     }
+    /// USD 1.00 verification order that asks the buyer to save their PayPal wallet for future
+    /// merchant-initiated payments under a spending mandate.
+    pub async fn create_vault_setup(
+        &self,
+        base: &str,
+        request_id: &str,
+        reference: &str,
+    ) -> Result<Value> {
+        if self.replay {
+            return Ok(
+                json!({"id":format!("REPLAY-VAULT-{request_id}"),"status":"PAYER_ACTION_REQUIRED","links":[{"rel":"payer-action","href":format!("{base}/agent?replay_vault=required")}]}),
+            );
+        }
+        self.call(reqwest::Method::POST,"/v2/checkout/orders",Some(json!({
+            "intent":"AUTHORIZE",
+            "purchase_units":[{"reference_id":reference,"custom_id":reference,"description":"QuarantinePay mandate verification (voided immediately)","payee":{"merchant_id":get("PAYPAL_MERCHANT_ID","")},"amount":{"currency_code":"USD","value":"1.00"}}],
+            "payment_source":{"paypal":{"attributes":{"vault":{"store_in_vault":"ON_SUCCESS","usage_type":"MERCHANT","customer_type":"CONSUMER"}},"experience_context":{"return_url":format!("{base}/paypal/return"),"cancel_url":format!("{base}/agent"),"user_action":"PAY_NOW"}}}
+        })),request_id).await
+    }
+    /// Authorize the approved verification order. Returns (vault_id, authorization_id).
+    pub async fn complete_vault_setup(
+        &self,
+        order_id: &str,
+        request_id: &str,
+    ) -> Result<(String, String)> {
+        if self.replay {
+            return Ok((
+                format!("REPLAY-VAULT-ID-{request_id}"),
+                format!("REPLAY-VERIFY-AUTH-{request_id}"),
+            ));
+        }
+        let order = self.order(order_id).await?;
+        let value = if order["status"] == "COMPLETED" {
+            order
+        } else {
+            ensure!(
+                order["status"] == "APPROVED",
+                "buyer has not approved the mandate at PayPal"
+            );
+            self.call(
+                reqwest::Method::POST,
+                &format!("/v2/checkout/orders/{order_id}/authorize"),
+                Some(json!({})),
+                request_id,
+            )
+            .await?
+        };
+        let vault = value
+            .pointer("/payment_source/paypal/attributes/vault")
+            .cloned()
+            .unwrap_or(Value::Null);
+        ensure!(
+            vault["status"] == "VAULTED",
+            "PayPal did not save the wallet for future payments"
+        );
+        let vault_id = vault["id"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("missing vault id"))?
+            .to_string();
+        let auth = value
+            .pointer("/purchase_units/0/payments/authorizations/0/id")
+            .and_then(Value::as_str)
+            .ok_or_else(|| anyhow::anyhow!("missing verification authorization"))?
+            .to_string();
+        Ok((vault_id, auth))
+    }
+    /// Merchant-initiated AUTHORIZE order paid from a vaulted wallet: no buyer interaction.
+    pub async fn create_vaulted(
+        &self,
+        signed: &SignedIntent,
+        vault_id: &str,
+        request_id: &str,
+    ) -> Result<Value> {
+        if self.replay {
+            return Ok(
+                json!({"id":format!("REPLAY-MIT-{request_id}"),"status":"COMPLETED","purchase_units":[{"payments":{"authorizations":[{"id":format!("REPLAY-AUTH-{request_id}"),"status":"CREATED"}]}}]}),
+            );
+        }
+        let i = &signed.intent;
+        self.call(reqwest::Method::POST,"/v2/checkout/orders",Some(json!({
+            "intent":"AUTHORIZE",
+            "purchase_units":[{"reference_id":i.id.to_string(),"custom_id":i.id.to_string(),"payee":{"merchant_id":i.merchant_id},"amount":{"currency_code":i.currency,"value":format!("{}.{:02}",i.amount_minor/100,i.amount_minor%100)}}],
+            "payment_source":{"paypal":{"vault_id":vault_id}}
+        })),request_id).await
+    }
+    pub async fn void_authorization(&self, id: &str, request_id: &str) -> Result<Value> {
+        self.resolve(id, false, request_id).await
+    }
     pub async fn order(&self, id: &str) -> Result<Value> {
         self.call(
             reqwest::Method::GET,

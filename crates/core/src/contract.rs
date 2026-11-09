@@ -44,6 +44,10 @@ pub struct PurchaseContract {
     pub buyer_review_required: bool,
     /// SHA-256 of the negotiation transcript the buyer saw when approving.
     pub negotiation_digest: String,
+    /// Set when the agent bought autonomously under a buyer-signed spending mandate. Absent on
+    /// manually approved contracts, so their digests and signatures are unchanged.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mandate_id: Option<String>,
 }
 
 fn printable(value: &str, min: usize, max: usize) -> bool {
@@ -115,8 +119,8 @@ impl PurchaseContract {
         );
         ensure!(self.require_https_sources, "sources must be HTTPS links");
         ensure!(
-            self.buyer_review_required,
-            "agent contracts always require buyer review before capture"
+            self.buyer_review_required || self.mandate_id.is_some(),
+            "only a buyer-signed mandate can waive buyer review before capture"
         );
         ensure!(
             self.negotiation_digest.len() == 64
@@ -548,6 +552,15 @@ pub fn compile_contract(
     objective: &Objective,
     negotiation: &Negotiation,
 ) -> Result<PurchaseContract> {
+    compile_contract_under(objective, negotiation, None)
+}
+/// Compile a contract, optionally under a spending mandate. The mandate decides whether a clean
+/// delivery may be captured without the buyer; it never widens the contract itself.
+pub fn compile_contract_under(
+    objective: &Objective,
+    negotiation: &Negotiation,
+    mandate: Option<&SpendingMandate>,
+) -> Result<PurchaseContract> {
     let selected = negotiation
         .selected
         .as_deref()
@@ -573,11 +586,148 @@ pub fn compile_contract(
         minimum_competitors: objective.minimum_competitors,
         minimum_sources: objective.minimum_sources,
         require_https_sources: true,
-        buyer_review_required: true,
+        buyer_review_required: !mandate.is_some_and(|m| m.auto_capture_clean),
         negotiation_digest: negotiation.transcript_digest(),
+        mandate_id: mandate.map(|m| m.id.clone()),
     };
     contract.validate()?;
     Ok(contract)
+}
+
+/// Ceiling on any mandate's total budget, whatever the buyer asks for.
+pub const MAX_MANDATE_TOTAL_MINOR: u64 = 50_000;
+/// Mandates are short-lived delegations.
+pub const MAX_MANDATE_SECONDS: i64 = 7 * 24 * 3600;
+
+/// A buyer-signed, bounded delegation that lets the agent purchase without per-purchase approval.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct SpendingMandate {
+    pub version: u8,
+    pub id: String,
+    pub buyer: String,
+    pub currency: String,
+    pub max_per_purchase_minor: u64,
+    pub max_total_minor: u64,
+    pub allowed_kinds: Vec<String>,
+    pub allowed_sellers: Vec<String>,
+    pub min_competitors: u8,
+    pub min_sources: u8,
+    /// Allow capture without the buyer only for deliveries that pass every deterministic check,
+    /// carry no policy hold, and that the analyst rates low risk. Anything else escalates.
+    pub auto_capture_clean: bool,
+    pub created_at: i64,
+    pub expires_at: i64,
+}
+impl SpendingMandate {
+    pub fn digest(&self) -> String {
+        hex::encode(Sha256::digest(
+            serde_json::to_vec(self).expect("serializable mandate"),
+        ))
+    }
+    pub fn validate(&self, now: i64) -> Result<()> {
+        ensure!(self.version == 1, "unsupported mandate version");
+        ensure!(self.currency == "USD", "only USD mandates are supported");
+        ensure!(
+            self.max_per_purchase_minor >= 100 && self.max_per_purchase_minor <= MAX_CONTRACT_MINOR,
+            "per-purchase cap must be USD 1.00-100.00"
+        );
+        ensure!(
+            self.max_total_minor >= self.max_per_purchase_minor
+                && self.max_total_minor <= MAX_MANDATE_TOTAL_MINOR,
+            "total budget must cover one purchase and stay within USD 500.00"
+        );
+        ensure!(
+            self.allowed_kinds == ["research_report"],
+            "only research_report purchases can be delegated"
+        );
+        ensure!(
+            !self.allowed_sellers.is_empty()
+                && self.allowed_sellers.iter().all(|s| seller(s).is_some()),
+            "mandate sellers must be on the allowlist"
+        );
+        ensure!(
+            (1..=10).contains(&self.min_competitors) && (1..=20).contains(&self.min_sources),
+            "mandate scope floors out of bounds"
+        );
+        ensure!(
+            self.expires_at > now && self.expires_at - self.created_at <= MAX_MANDATE_SECONDS,
+            "mandate expired or longer than seven days"
+        );
+        Ok(())
+    }
+    /// Deterministic check that a compiled contract falls inside this mandate given what has
+    /// already been committed under it. Returns every violated rule.
+    pub fn permits(
+        &self,
+        contract: &PurchaseContract,
+        committed_minor: u64,
+        now: i64,
+    ) -> Vec<String> {
+        let mut v = Vec::new();
+        if let Err(e) = self.validate(now) {
+            v.push(e.to_string());
+        }
+        if contract.mandate_id.as_deref() != Some(self.id.as_str()) {
+            v.push("contract is not bound to this mandate".into());
+        }
+        if contract.amount_minor > self.max_per_purchase_minor {
+            v.push(format!(
+                "price USD {:.2} exceeds the per-purchase cap USD {:.2}",
+                contract.amount_minor as f64 / 100.0,
+                self.max_per_purchase_minor as f64 / 100.0
+            ));
+        }
+        if committed_minor.saturating_add(contract.amount_minor) > self.max_total_minor {
+            v.push(format!(
+                "remaining mandate budget USD {:.2} is less than USD {:.2}",
+                self.max_total_minor.saturating_sub(committed_minor) as f64 / 100.0,
+                contract.amount_minor as f64 / 100.0
+            ));
+        }
+        if !self.allowed_kinds.contains(&contract.kind) {
+            v.push("purchase type not delegated".into());
+        }
+        if !self.allowed_sellers.contains(&contract.seller_id) {
+            v.push(format!("{} is not an allowed seller", contract.seller));
+        }
+        if contract.minimum_competitors < self.min_competitors
+            || contract.minimum_sources < self.min_sources
+        {
+            v.push("contract scope is below the mandate's minimum".into());
+        }
+        if contract.buyer_review_required == self.auto_capture_clean {
+            v.push("contract review setting does not match the mandate".into());
+        }
+        v
+    }
+}
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SignedMandate {
+    pub mandate: SpendingMandate,
+    pub signature: String,
+}
+const MANDATE_DOMAIN: &[u8] = b"quarantinepay-mandate-v1:";
+impl SignedMandate {
+    pub fn sign(mandate: SpendingMandate, key: &ed25519_dalek::SigningKey) -> Result<Self> {
+        use ed25519_dalek::Signer;
+        let mut msg = MANDATE_DOMAIN.to_vec();
+        msg.extend(serde_json::to_vec(&mandate)?);
+        Ok(Self {
+            signature: hex::encode(key.sign(&msg).to_bytes()),
+            mandate,
+        })
+    }
+    pub fn verify(&self, key: &ed25519_dalek::VerifyingKey, buyer: &str, now: i64) -> Result<()> {
+        ensure!(self.mandate.buyer == buyer, "mandate buyer mismatch");
+        self.mandate.validate(now)?;
+        let mut msg = MANDATE_DOMAIN.to_vec();
+        msg.extend(serde_json::to_vec(&self.mandate)?);
+        let sig = ed25519_dalek::Signature::from_slice(&hex::decode(&self.signature)?)?;
+        key.verify_strict(&msg, &sig)?;
+        Ok(())
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -1144,6 +1294,101 @@ mod tests {
         assert!(bad.reason.contains("policy hold"));
     }
 
+    fn mandate(now: i64) -> SpendingMandate {
+        SpendingMandate {
+            version: 1,
+            id: "m-1".into(),
+            buyer: "buyer".into(),
+            currency: "USD".into(),
+            max_per_purchase_minor: 6_000,
+            max_total_minor: 10_000,
+            allowed_kinds: vec!["research_report".into()],
+            allowed_sellers: vec!["northstar".into(), "quillfire".into()],
+            min_competitors: 3,
+            min_sources: 5,
+            auto_capture_clean: true,
+            created_at: now,
+            expires_at: now + 3600,
+        }
+    }
+    #[test]
+    fn mandates_bound_autonomous_contracts() {
+        let now = 1_000_000;
+        let m = mandate(now);
+        let o = parse_objective(request()).bounded().unwrap();
+        let c = compile_contract_under(&o, &negotiate(&o), Some(&m)).unwrap();
+        assert!(!c.buyer_review_required, "clean auto-capture was delegated");
+        assert_eq!(c.mandate_id.as_deref(), Some("m-1"));
+        assert!(
+            m.permits(&c, 0, now).is_empty(),
+            "{:?}",
+            m.permits(&c, 0, now)
+        );
+        // Budget is cumulative.
+        assert!(!m.permits(&c, 6_000, now).is_empty());
+        // Per-purchase cap.
+        let mut tight = m.clone();
+        tight.max_per_purchase_minor = 1_000;
+        assert!(
+            tight
+                .permits(&c, 0, now)
+                .iter()
+                .any(|r| r.contains("per-purchase"))
+        );
+        // Seller allowlist and scope floors.
+        let mut narrow = m.clone();
+        narrow.allowed_sellers = vec!["northstar".into()];
+        narrow.min_sources = 8;
+        let r = narrow.permits(&c, 0, now);
+        assert!(r.iter().any(|x| x.contains("not an allowed seller")));
+        assert!(r.iter().any(|x| x.contains("scope")));
+        // Expired mandates authorize nothing.
+        assert!(!m.permits(&c, 0, now + 7200).is_empty());
+        // Without a mandate a contract can never waive review.
+        let mut forged = c.clone();
+        forged.mandate_id = None;
+        assert!(forged.validate().is_err());
+        // Manual contracts are unchanged: review always required, no mandate field.
+        let manual = compile_contract(&o, &negotiate(&o)).unwrap();
+        assert!(manual.buyer_review_required && manual.mandate_id.is_none());
+        assert!(
+            !serde_json::to_string(&manual)
+                .unwrap()
+                .contains("mandate_id")
+        );
+    }
+    #[test]
+    fn mandates_are_signed_and_bounded() {
+        let key = ed25519_dalek::SigningKey::from_bytes(&[5; 32]);
+        let now = 1_000_000;
+        let signed = SignedMandate::sign(mandate(now), &key).unwrap();
+        signed.verify(&key.verifying_key(), "buyer", now).unwrap();
+        let mut raised = signed.clone();
+        raised.mandate.max_total_minor = 50_000;
+        assert!(raised.verify(&key.verifying_key(), "buyer", now).is_err());
+        assert!(
+            signed
+                .verify(&key.verifying_key(), "someone-else", now)
+                .is_err()
+        );
+        let mut m = mandate(now);
+        m.max_total_minor = 1_000_000;
+        assert!(m.validate(now).is_err());
+        let mut m = mandate(now);
+        m.expires_at = now + 30 * 24 * 3600;
+        assert!(m.validate(now).is_err());
+        // An intent signature cannot be replayed as a mandate signature (domain separation).
+        use ed25519_dalek::Signer;
+        let raw = hex::encode(
+            key.sign(&serde_json::to_vec(&mandate(now)).unwrap())
+                .to_bytes(),
+        );
+        let replay = SignedMandate {
+            mandate: mandate(now),
+            signature: raw,
+        };
+        assert!(replay.verify(&key.verifying_key(), "buyer", now).is_err());
+    }
     #[test]
     fn counts_are_distinct_and_links_must_be_https() {
         let c = contract();

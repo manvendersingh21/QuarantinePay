@@ -2,11 +2,13 @@
 //! buyer's approval of the exact contract digest is what creates a signed intent and an order.
 use crate::{App, db};
 use anyhow::Result;
-use quarantinepay_core::contract::{compile_contract, negotiate, sellers};
+use quarantinepay_core::contract::{
+    SignedMandate, compile_contract, compile_contract_under, negotiate, sellers,
+};
 use serde_json::{Value, json};
 use uuid::Uuid;
 
-pub async fn create(app: &App, request: &str) -> Result<Uuid> {
+pub async fn create(app: &App, request: &str, mandate: Option<Uuid>) -> Result<Uuid> {
     let request: String = request
         .chars()
         .filter(|c| !c.is_control() || *c == '\n')
@@ -17,22 +19,23 @@ pub async fn create(app: &App, request: &str) -> Result<Uuid> {
         "describe what the agent should buy"
     );
     let id = Uuid::new_v4();
-    sqlx::query("INSERT INTO agent_tasks(id,buyer,mode,request,state) VALUES($1,'demo-buyer',$2,$3,'planning')")
+    sqlx::query("INSERT INTO agent_tasks(id,buyer,mode,request,state,mandate_id) VALUES($1,'demo-buyer',$2,$3,'planning',$4)")
         .bind(id)
         .bind(&app.config.mode)
         .bind(&request)
+        .bind(mandate)
         .execute(&app.pool)
         .await?;
     db::task_event(
         &app.pool,
         id,
         "agent_task_created",
-        json!({"task_id":id,"request":request}),
+        json!({"task_id":id,"request":request,"mandate_id":mandate,"mode":if mandate.is_some() {"autonomous"} else {"manual"}}),
     )
     .await?;
     let worker = app.clone();
     tokio::spawn(async move {
-        if let Err(e) = run(&worker, id, &request).await {
+        if let Err(e) = run(&worker, id, &request, mandate).await {
             tracing::warn!(%id, error=%e, "agent task failed");
             let _ = sqlx::query("UPDATE agent_tasks SET state='failed',error=$2,updated_at=now() WHERE id=$1 AND state IN ('planning','negotiating')")
                 .bind(id)
@@ -51,8 +54,28 @@ pub async fn create(app: &App, request: &str) -> Result<Uuid> {
     Ok(id)
 }
 
-async fn run(app: &App, id: Uuid, request: &str) -> Result<()> {
-    let (objective, planner) = crate::analyst::plan(app, request).await;
+async fn run(app: &App, id: Uuid, request: &str, mandate_id: Option<Uuid>) -> Result<()> {
+    let (mut objective, planner) = crate::analyst::plan(app, request).await;
+    // Under a mandate the agent may never negotiate above the signed per-purchase cap.
+    let mandate = match mandate_id {
+        Some(mid) => {
+            let signed: Option<serde_json::Value> = sqlx::query_scalar(
+                "SELECT signed FROM mandates WHERE id=$1 AND buyer='demo-buyer' AND mode=$2",
+            )
+            .bind(mid)
+            .bind(&app.config.mode)
+            .fetch_optional(&app.pool)
+            .await?;
+            let signed: SignedMandate = serde_json::from_value(
+                signed.ok_or_else(|| anyhow::anyhow!("mandate not found"))?,
+            )?;
+            objective.budget_minor = objective
+                .budget_minor
+                .min(signed.mandate.max_per_purchase_minor);
+            Some(signed.mandate)
+        }
+        None => None,
+    };
     sqlx::query("UPDATE agent_tasks SET state='negotiating',planner=$2,objective=$3,updated_at=now() WHERE id=$1")
         .bind(id)
         .bind(&planner)
@@ -81,6 +104,37 @@ async fn run(app: &App, id: Uuid, request: &str) -> Result<()> {
         json!({"task_id":id,"messages":negotiation.transcript.len(),"offers":negotiation.offers,"rationale":negotiation.rationale}),
     )
     .await?;
+    if let Some(m) = &mandate
+        && let Ok(contract) = compile_contract_under(&objective, &negotiation, Some(m))
+    {
+        let (approved, autonomy, order) =
+            crate::autonomous_checkout(app, id, mandate_id.unwrap_or_default(), &contract).await?;
+        db::task_event(
+            &app.pool,
+            id,
+            "mandate_policy_check",
+            json!({"task_id":id,"decision":autonomy["decision"],"reasons":autonomy["reasons"],"remaining_minor":autonomy["remaining_minor"]}),
+        )
+        .await?;
+        if approved {
+            sqlx::query("UPDATE agent_tasks SET state='purchasing',negotiation=$2,proposal=$3,proposal_digest=$4,order_id=$5,autonomy=$6,updated_at=now() WHERE id=$1 AND state='negotiating'")
+                .bind(id)
+                .bind(serde_json::to_value(&negotiation)?)
+                .bind(serde_json::to_value(&contract)?)
+                .bind(contract.digest())
+                .bind(order)
+                .bind(&autonomy)
+                .execute(&app.pool)
+                .await?;
+            return Ok(());
+        }
+        // Outside the mandate: fall back to a normal proposal that needs the buyer.
+        sqlx::query("UPDATE agent_tasks SET autonomy=$2 WHERE id=$1")
+            .bind(id)
+            .bind(&autonomy)
+            .execute(&app.pool)
+            .await?;
+    }
     match compile_contract(&objective, &negotiation) {
         Ok(contract) => {
             let digest = contract.digest();
@@ -118,7 +172,7 @@ async fn run(app: &App, id: Uuid, request: &str) -> Result<()> {
     Ok(())
 }
 
-const TASK_JSON: &str = "SELECT jsonb_build_object('id',t.id,'request',t.request,'state',t.state,'planner',t.planner,'objective',t.objective,'negotiation',t.negotiation,'proposal',t.proposal,'proposal_digest',t.proposal_digest,'order_id',t.order_id,'error',t.error,'created_at',t.created_at,'updated_at',t.updated_at,'mode',t.mode,'order',(SELECT to_jsonb(o) FROM orders o WHERE o.id=t.order_id AND o.mode=t.mode)) FROM agent_tasks t";
+const TASK_JSON: &str = "SELECT jsonb_build_object('id',t.id,'request',t.request,'state',t.state,'planner',t.planner,'objective',t.objective,'negotiation',t.negotiation,'proposal',t.proposal,'proposal_digest',t.proposal_digest,'order_id',t.order_id,'error',t.error,'mandate_id',t.mandate_id,'autonomy',t.autonomy,'created_at',t.created_at,'updated_at',t.updated_at,'mode',t.mode,'order',(SELECT to_jsonb(o) FROM orders o WHERE o.id=t.order_id AND o.mode=t.mode)) FROM agent_tasks t";
 
 pub async fn get(app: &App, id: Uuid) -> Result<Option<Value>> {
     Ok(sqlx::query_scalar::<_, Value>(&format!(
@@ -130,7 +184,7 @@ pub async fn get(app: &App, id: Uuid) -> Result<Option<Value>> {
     .await?)
 }
 pub async fn list(app: &App) -> Result<Vec<Value>> {
-    Ok(sqlx::query_scalar::<_, Value>("SELECT jsonb_build_object('id',t.id,'request',t.request,'state',COALESCE((SELECT o.state FROM orders o WHERE o.id=t.order_id AND o.state IN ('captured','voided','declined','reconciliation_required')),t.state),'task_state',t.state,'created_at',t.created_at,'amount_minor',(t.proposal->>'amount_minor')::bigint,'seller',t.proposal->>'seller','order_state',(SELECT state FROM orders o WHERE o.id=t.order_id)) FROM agent_tasks t WHERE t.buyer='demo-buyer' AND t.mode=$1 ORDER BY t.created_at DESC LIMIT 20")
+    Ok(sqlx::query_scalar::<_, Value>("SELECT jsonb_build_object('id',t.id,'request',t.request,'state',COALESCE((SELECT o.state FROM orders o WHERE o.id=t.order_id AND o.state IN ('captured','voided','declined','reconciliation_required')),t.state),'task_state',t.state,'created_at',t.created_at,'amount_minor',(t.proposal->>'amount_minor')::bigint,'seller',t.proposal->>'seller','order_state',(SELECT state FROM orders o WHERE o.id=t.order_id),'mandate_id',t.mandate_id) FROM agent_tasks t WHERE t.buyer='demo-buyer' AND t.mode=$1 ORDER BY t.created_at DESC LIMIT 20")
         .bind(&app.config.mode)
         .fetch_all(&app.pool)
         .await?)
@@ -160,6 +214,7 @@ pub async fn analytics(app: &App) -> Result<Value> {
           'injection_detected', COALESCE((o.analysis->>'injection_detected')::boolean, false),
           'recommended_action', o.analysis->>'recommended_action',
           'review_decision', o.review_decision, 'risk_override', o.risk_override,
+          'autonomous', o.mandate_id IS NOT NULL,
           'task_id', (SELECT t.id FROM agent_tasks t WHERE t.order_id = o.id),
           'kind', CASE WHEN o.intent->'intent' ? 'contract' THEN 'contract' WHEN o.intent->'intent' ? 'scenario' THEN 'catalog' ELSE 'legacy' END)
         FROM orders o WHERE o.buyer='demo-buyer' AND o.mode=$1 ORDER BY o.created_at DESC LIMIT 500"#)

@@ -203,6 +203,46 @@ async fn process(app: &App, id: uuid::Uuid) -> Result<()> {
         };
         let capture =
             verdict["passed"] == true && order.deadline.is_some_and(|t| t > chrono::Utc::now());
+        // Auto-capture is possible only for a mandate contract that delegated it, and only when
+        // every independent signal is clean. Anything else escalates to the buyer.
+        let mandate_auto = signed
+            .intent
+            .contract
+            .as_ref()
+            .is_some_and(|c| !c.buyer_review_required && c.mandate_id.is_some())
+            && order.mandate_id.is_some();
+        if capture && mandate_auto {
+            let Some(a) = analysis.clone() else {
+                return Ok(());
+            };
+            let clean = a["policy_hold"] == false
+                && a["injection_detected"] == false
+                && a["risk"] == "low"
+                && a["recommended_action"] == "approve"
+                && a["analyst"]["source"] == "model";
+            if clean {
+                let request_id = uuid::Uuid::new_v4();
+                sqlx::query("UPDATE orders SET state='capture_pending',operation='capture',request_id=$2,verification=$3,analysis=$4,updated_at=now() WHERE id=$1")
+                    .bind(id).bind(request_id).bind(&verdict).bind(&a).execute(&mut *tx).await?;
+                db::event_tx(&mut tx, Some(id), "verification_complete", verdict).await?;
+                db::event_tx(
+                    &mut tx,
+                    Some(id),
+                    "ai_analysis_complete",
+                    json!({"risk":a["risk"],"injection_detected":a["injection_detected"],"recommended_action":a["recommended_action"],"analyst":a["analyst"]["source"],"payment_authority":false}),
+                )
+                .await?;
+                db::event_tx(
+                    &mut tx,
+                    Some(id),
+                    "auto_capture_policy_satisfied",
+                    json!({"mandate_id":order.mandate_id,"checks":["all deterministic contract checks passed","no untrusted instructions or policy hold","model analyst: low risk, recommends approve","delivery before deadline"],"human_click":false}),
+                )
+                .await?;
+                tx.commit().await?;
+                return Ok(());
+            }
+        }
         if capture && review_required(&signed) {
             let analysis = if signed.intent.contract.is_some() {
                 // Wait for the analyst; the deadline still applies while it runs.
@@ -232,6 +272,15 @@ async fn process(app: &App, id: uuid::Uuid) -> Result<()> {
                     )
                     .await?;
                 }
+            }
+            if mandate_auto {
+                db::event_tx(
+                    &mut tx,
+                    Some(id),
+                    "escalated_to_buyer",
+                    json!({"reason":"The delivery did not meet the mandate's auto-capture policy; the buyer decides"}),
+                )
+                .await?;
             }
             db::event_tx(
                 &mut tx,
@@ -316,6 +365,75 @@ async fn process(app: &App, id: uuid::Uuid) -> Result<()> {
         )
         .await?;
         tx.commit().await?;
+        return Ok(());
+    }
+    if order.state == "create_pending"
+        && let Some(mandate) = order.mandate_id
+    {
+        // Merchant-initiated authorization from the buyer's vaulted wallet: no checkout click.
+        let vault = match crate::mandate::vault_for_order(app, mandate).await {
+            Ok(v) => v,
+            Err(e) => {
+                sqlx::query("UPDATE orders SET state='declined',updated_at=now() WHERE id=$1")
+                    .bind(id)
+                    .execute(&mut *tx)
+                    .await?;
+                db::event_tx(
+                    &mut tx,
+                    Some(id),
+                    "mandate_refused_payment",
+                    json!({"mandate_id":mandate,"reason":e.to_string()}),
+                )
+                .await?;
+                tx.commit().await?;
+                return Ok(());
+            }
+        };
+        match app
+            .paypal
+            .create_vaulted(&signed, &vault, &request_id)
+            .await
+        {
+            Ok(value) => {
+                let auth = value
+                    .pointer("/purchase_units/0/payments/authorizations/0")
+                    .cloned()
+                    .unwrap_or(Value::Null);
+                ensure!(
+                    value["status"] == "COMPLETED" && auth["status"] == "CREATED",
+                    "vaulted authorization not confirmed"
+                );
+                let auth_id = auth["id"]
+                    .as_str()
+                    .ok_or_else(|| anyhow::anyhow!("missing authorization ID"))?;
+                let provider_id = value["id"].as_str().unwrap_or("");
+                sqlx::query("UPDATE orders SET state='authorized',paypal_order=$2,authorization_id=$3,deadline=now()+($5 * interval '1 second'),provider_result=$4,updated_at=now() WHERE id=$1")
+                    .bind(id).bind(provider_id).bind(auth_id).bind(&value).bind(deadline_seconds(&signed)).execute(&mut *tx).await?;
+                db::event_tx(
+                    &mut tx,
+                    Some(id),
+                    if app.config.mode == "replay" { "simulated_payment_result" } else { "provider_confirmed" },
+                    json!({"operation":"vaulted_authorize","mode":app.config.mode,"simulated":app.config.mode == "replay","human_click":false}),
+                )
+                .await?;
+                tx.commit().await?;
+            }
+            Err(error) => {
+                if let Some(failure) = error
+                    .downcast_ref::<crate::paypal::PayPalFailure>()
+                    .filter(|f| f.definitive())
+                {
+                    sqlx::query("UPDATE orders SET state='declined',updated_at=now() WHERE id=$1")
+                        .bind(id)
+                        .execute(&mut *tx)
+                        .await?;
+                    db::event_tx(&mut tx, Some(id), "provider_refused", json!({"operation":"vaulted_authorize","status":failure.status,"code":failure.name,"issues":failure.issues,"debug_id":failure.debug_id,"claimed_success":false})).await?;
+                } else {
+                    tracing::warn!(%id, error=%error, "vaulted authorization pending; retrying with stable request ID");
+                }
+                tx.commit().await?;
+            }
+        }
         return Ok(());
     }
     let result = match order.state.as_str() {

@@ -5,6 +5,7 @@ mod config;
 mod db;
 mod inference;
 mod integrations;
+mod mandate;
 mod paypal;
 mod shopify;
 mod worker;
@@ -550,6 +551,9 @@ async fn ui_reset(State(app): State<App>, h: HeaderMap) -> Api<Redirect> {
     sqlx::query("DELETE FROM orders WHERE mode='replay' AND buyer='demo-buyer'")
         .execute(&mut *tx)
         .await?;
+    sqlx::query("DELETE FROM mandates WHERE mode='replay' AND buyer='demo-buyer'")
+        .execute(&mut *tx)
+        .await?;
     sqlx::query("DELETE FROM intents WHERE mode='replay' AND buyer='demo-buyer'")
         .execute(&mut *tx)
         .await?;
@@ -732,6 +736,166 @@ async fn mint_contract(app: &App, contract: PurchaseContract) -> Api<SignedInten
 #[serde(deny_unknown_fields)]
 struct TaskRequest {
     request: String,
+    /// Mandate the agent may buy under without asking (form checkbox or API field).
+    #[serde(default, alias = "mandate_id")]
+    use_mandate: Option<String>,
+}
+fn mandate_choice(v: &Option<String>) -> Api<Option<Uuid>> {
+    match v.as_deref().map(str::trim) {
+        None | Some("") => Ok(None),
+        Some(s) => s
+            .parse()
+            .map(Some)
+            .map_err(|_| Error(StatusCode::BAD_REQUEST, "invalid mandate id".into())),
+    }
+}
+/// Autonomous purchase under a mandate. The mandate row stays locked while the policy check runs
+/// and the signed intent and order are written, so concurrent tasks cannot overspend it.
+pub(crate) async fn autonomous_checkout(
+    app: &App,
+    task: Uuid,
+    mandate_id: Uuid,
+    contract: &PurchaseContract,
+) -> anyhow::Result<(bool, Value, Option<Uuid>)> {
+    let mut tx = app.pool.begin().await?;
+    let decision = mandate::check(&mut tx, app, mandate_id, contract).await?;
+    if !decision.approved {
+        tx.commit().await?;
+        return Ok((false, decision.record, None));
+    }
+    contract.validate()?;
+    anyhow::ensure!(!app.config.merchant.is_empty(), "merchant not configured");
+    let intent = Intent {
+        version: 1,
+        id: Uuid::new_v4(),
+        buyer: "demo-buyer".into(),
+        sku: CONTRACT_SKU.into(),
+        merchant_id: app.config.merchant.clone(),
+        amount_minor: contract.amount_minor,
+        currency: contract.currency.clone(),
+        expires_at: chrono::Utc::now().timestamp() + 1800,
+        policy_digest: contract.digest(),
+        scenario: None,
+        contract: Some(contract.clone()),
+    };
+    let signed = SignedIntent::sign(intent, &app.config.key)?;
+    signed.verify(
+        &app.config.key.verifying_key(),
+        "demo-buyer",
+        chrono::Utc::now().timestamp(),
+    )?;
+    let token = serde_json::to_value(&signed)?;
+    sqlx::query("INSERT INTO intents(id,buyer,token,mode,used) VALUES($1,'demo-buyer',$2,$3,true)")
+        .bind(signed.intent.id)
+        .bind(&token)
+        .bind(&app.config.mode)
+        .execute(&mut *tx)
+        .await?;
+    let order = Uuid::new_v4();
+    sqlx::query("INSERT INTO orders(id,buyer,intent,state,operation,request_id,mode,simulation_outcome,mandate_id) VALUES($1,'demo-buyer',$2,'create_pending','create',$3,$4,'approve',$5)")
+        .bind(order)
+        .bind(&token)
+        .bind(Uuid::new_v4())
+        .bind(&app.config.mode)
+        .bind(mandate_id)
+        .execute(&mut *tx)
+        .await?;
+    db::event_tx(
+        &mut tx,
+        Some(order),
+        "intent_bound",
+        json!({"amount_minor":contract.amount_minor,"currency":"USD","mode":app.config.mode,"mandate_id":mandate_id}),
+    )
+    .await?;
+    db::event_tx(
+        &mut tx,
+        Some(order),
+        "agent_autonomous_purchase",
+        json!({"task_id":task,"mandate_id":mandate_id,"seller":contract.seller,"amount_minor":contract.amount_minor,"contract_digest":contract.digest(),"auto_capture_clean":!contract.buyer_review_required,"human_click":false}),
+    )
+    .await?;
+    tx.commit().await?;
+    Ok((true, decision.record, Some(order)))
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct MandateForm {
+    max_per_purchase_usd: f64,
+    max_total_usd: f64,
+    hours: i64,
+    #[serde(default)]
+    auto_capture_clean: bool,
+}
+fn mandate_terms(f: &MandateForm) -> Api<mandate::MandateTerms> {
+    let minor = |v: f64| -> Api<u64> {
+        if !v.is_finite() || v <= 0.0 || v > 100_000.0 {
+            return Err(Error(StatusCode::BAD_REQUEST, "invalid amount".into()));
+        }
+        Ok((v * 100.0).round() as u64)
+    };
+    Ok(mandate::MandateTerms {
+        max_per_purchase_minor: minor(f.max_per_purchase_usd)?,
+        max_total_minor: minor(f.max_total_usd)?,
+        hours: f.hours,
+        auto_capture_clean: f.auto_capture_clean,
+    })
+}
+async fn api_create_mandate(
+    State(app): State<App>,
+    h: HeaderMap,
+    Json(f): Json<MandateForm>,
+) -> Api<Json<Value>> {
+    authenticated(&app, &h, true)?;
+    Ok(Json(mandate::create(&app, mandate_terms(&f)?).await?))
+}
+async fn api_mandates(State(app): State<App>, h: HeaderMap) -> Api<Json<Value>> {
+    authenticated(&app, &h, false)?;
+    Ok(Json(json!({"mandates":mandate::list(&app).await?})))
+}
+async fn api_activate_mandate(
+    State(app): State<App>,
+    h: HeaderMap,
+    Path(id): Path<Uuid>,
+) -> Api<Json<Value>> {
+    authenticated(&app, &h, true)?;
+    mandate::activate(&app, id).await?;
+    Ok(Json(json!({"state":"active"})))
+}
+async fn api_revoke_mandate(
+    State(app): State<App>,
+    h: HeaderMap,
+    Path(id): Path<Uuid>,
+) -> Api<Json<Value>> {
+    authenticated(&app, &h, true)?;
+    mandate::revoke(&app, id).await?;
+    Ok(Json(json!({"state":"revoked"})))
+}
+async fn ui_create_mandate(
+    State(app): State<App>,
+    h: HeaderMap,
+    Form(f): Form<MandateForm>,
+) -> Api<Redirect> {
+    authenticated(&app, &h, true)?;
+    mandate::create(&app, mandate_terms(&f)?).await?;
+    Ok(Redirect::to("/agent"))
+}
+async fn ui_activate_mandate(
+    State(app): State<App>,
+    h: HeaderMap,
+    Path(id): Path<Uuid>,
+) -> Api<Redirect> {
+    authenticated(&app, &h, true)?;
+    mandate::activate(&app, id).await?;
+    Ok(Redirect::to("/agent"))
+}
+async fn ui_revoke_mandate(
+    State(app): State<App>,
+    h: HeaderMap,
+    Path(id): Path<Uuid>,
+) -> Api<Redirect> {
+    authenticated(&app, &h, true)?;
+    mandate::revoke(&app, id).await?;
+    Ok(Redirect::to("/agent"))
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -829,7 +993,7 @@ async fn api_create_task(
     Json(input): Json<TaskRequest>,
 ) -> Api<Json<Value>> {
     authenticated(&app, &h, true)?;
-    let id = agent::create(&app, &input.request).await?;
+    let id = agent::create(&app, &input.request, mandate_choice(&input.use_mandate)?).await?;
     Ok(Json(json!({"id":id,"state":"planning"})))
 }
 async fn api_tasks(State(app): State<App>, h: HeaderMap) -> Api<Json<Value>> {
@@ -872,7 +1036,7 @@ async fn ui_create_task(
     Form(input): Form<TaskRequest>,
 ) -> Api<Redirect> {
     authenticated(&app, &h, true)?;
-    let id = agent::create(&app, &input.request).await?;
+    let id = agent::create(&app, &input.request, mandate_choice(&input.use_mandate)?).await?;
     Ok(Redirect::to(&format!("/agent/{id}")))
 }
 async fn ui_approve_task(
@@ -901,7 +1065,7 @@ async fn agent_page_inner(
     message: String,
 ) -> Api<Html<String>> {
     let logged = authenticated(app, h, false).is_ok();
-    let (tasks, selected, events) = if logged {
+    let (tasks, selected, events, mandates) = if logged {
         let tasks = agent::list(app).await?;
         let selected_id = id.or_else(|| {
             tasks
@@ -914,9 +1078,9 @@ async fn agent_page_inner(
             None => None,
         };
         let events = agent::events(app, selected_id).await?;
-        (tasks, selected, events)
+        (tasks, selected, events, mandate::list(app).await?)
     } else {
-        (Vec::new(), None, Vec::new())
+        (Vec::new(), None, Vec::new(), Vec::new())
     };
     Ok(Html(quarantinepay_ui::render_agent(
         app.config.mode.to_uppercase(),
@@ -924,6 +1088,7 @@ async fn agent_page_inner(
         tasks,
         selected,
         events,
+        mandates,
         logged,
         message,
     )))
@@ -1024,6 +1189,12 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/agent/tasks/{id}/approve", post(api_approve_task))
         .route("/api/agent/tasks/{id}/cancel", post(api_cancel_task))
         .route("/api/analytics/transactions", get(api_analytics))
+        .route("/api/mandates", post(api_create_mandate).get(api_mandates))
+        .route("/api/mandates/{id}/activate", post(api_activate_mandate))
+        .route("/api/mandates/{id}/revoke", post(api_revoke_mandate))
+        .route("/ui/mandates", post(ui_create_mandate))
+        .route("/ui/mandates/{id}/activate", post(ui_activate_mandate))
+        .route("/ui/mandates/{id}/revoke", post(ui_revoke_mandate))
         .route("/agent", get(agent_page))
         .route("/agent/{id}", get(agent_task_page))
         .route("/intelligence", get(intelligence_page))

@@ -3,6 +3,7 @@ use serde_json::Value;
 mod agent;
 mod html;
 mod intelligence;
+mod mandate;
 pub use agent::{EXAMPLE_REQUEST, render_agent};
 pub use intelligence::render_intelligence;
 pub fn render(
@@ -377,6 +378,50 @@ textarea:focus { border-color: var(--mint); outline: 3px solid #087f5b33; outlin
   .kpis { gap: 8px; } .kpi { padding: 12px; } .kpi strong { font-size: 22px; } .grid-host { height: 480px; } .grid-panel { padding: 12px; }
 }
 @media (prefers-reduced-motion: reduce) { .step.active .step-marker, .spinner { animation: none; } html { scroll-behavior: auto; } }
+/* Spending mandate */
+.agent-top { display: grid; grid-template-columns: minmax(0, 1fr) minmax(280px, 360px); gap: 25px; align-items: start; }
+.agent-top > .panel { min-width: 0; }
+.mandate-card { border-color: var(--violet-line); background: linear-gradient(180deg, #faf9ff, #fff 60%); }
+.mandate-card.mandate-active { border-color: var(--mint-line); background: linear-gradient(180deg, #f4fbf7, #fff 60%); }
+.mandate-card.mandate-pending { border-color: var(--amber-line); background: linear-gradient(180deg, #fffbf2, #fff 60%); }
+.mandate-card h2 { font-size: 16px; letter-spacing: -.2px; margin: 4px 0 6px; }
+.mandate-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 10px; }
+.mandate-head > div { min-width: 0; }
+.mandate-head .chip { flex: none; margin-top: 2px; }
+.mandate-fields { display: grid; grid-template-columns: repeat(auto-fit, minmax(96px, 1fr)); gap: 8px; margin-top: 4px; }
+.mandate-fields .field { max-width: none; line-height: 1.35; }
+.mandate-fields input { margin: 4px 0 8px; padding: 9px 10px; font-size: 14px; font-variant-numeric: tabular-nums; }
+.mandate-form .check { font-size: 12px; color: var(--ink); }
+.mandate-form button { width: 100%; }
+.mandate-terms { grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); }
+.mandate-steps { margin: 8px 0 10px; padding-left: 18px; font-size: 13px; display: grid; gap: 4px; }
+.mandate-card .actions { align-items: center; }
+.mandate-card .actions form { margin: 0; }
+.mandate-card > form:last-of-type { margin-top: 8px; }
+.budget { margin: 8px 0 4px; }
+.budget-figures { display: flex; align-items: baseline; flex-wrap: wrap; gap: 2px 8px; }
+.budget-figures strong { font-size: 26px; font-weight: 600; letter-spacing: -1px; font-variant-numeric: tabular-nums; color: var(--mint); }
+.budget-meter { display: block; width: 100%; height: 8px; margin: 6px 0 2px; border: 0; border-radius: 999px; background: #e3ece7; color: var(--mint); overflow: hidden; -webkit-appearance: none; appearance: none; }
+.budget-meter::-webkit-progress-bar { background: #e3ece7; border-radius: 999px; }
+.budget-meter::-webkit-progress-value { background: var(--mint); border-radius: 999px; }
+.budget-meter::-moz-progress-bar { background: var(--mint); border-radius: 999px; }
+.mandate-expiry { font-size: 13px; }
+.mandate-history { list-style: none; margin: 12px 0 0; padding: 10px 0 0; border-top: 1px solid var(--line); display: grid; gap: 2px; }
+.mandate-history li { overflow-wrap: anywhere; }
+.use-mandate { margin: -2px 0 12px; padding: 10px 12px; border-radius: 10px; background: var(--violet-soft); border: 1px solid var(--violet-line); color: #2e2670; }
+.use-mandate input { accent-color: var(--violet); }
+.head-chips { margin: 0; justify-content: flex-end; }
+.autonomy-note { margin-top: 0; }
+.mandate-budget-line { margin: 4px 0 8px; font-size: 13px; }
+.mandate-budget-line strong { color: var(--mint); font-variant-numeric: tabular-nums; }
+.vault-note { display: flex; align-items: flex-start; flex-wrap: wrap; gap: 6px 8px; margin: 4px 0 0; padding: 10px 12px; border-radius: 10px; font-size: 13px; background: var(--mint-soft); border: 1px solid var(--mint-line); color: #05543c; }
+.escalation { margin-top: 0; }
+@media (max-width: 1200px) { .agent-top { grid-template-columns: minmax(0, 1fr); gap: 0; } }
+@media (max-width: 650px) {
+  .mandate-fields { grid-template-columns: 1fr 1fr; } .mandate-fields input { font-size: 16px; }
+  .mandate-card .actions > *, .mandate-card .actions button, .mandate-card .actions .button { width: 100%; text-align: center; }
+  .task-head-top { flex-wrap: wrap; } .head-chips { justify-content: flex-start; }
+}
 "#;
 
 #[cfg(test)]
