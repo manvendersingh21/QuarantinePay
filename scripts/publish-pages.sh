@@ -20,11 +20,14 @@ if [ ! -d "$work/.git" ] && [ ! -f "$work/.git" ]; then
 fi
 updated="$(date -u '+%Y-%m-%d %H:%M UTC')"
 sed -e "s#__LIVE_URL__#${live}#g" -e "s#__UPDATED__#${updated}#g" site/index.html > "$work/index.html"
-cp demo/quarantinepay-autonomous-demo.mp4 demo/quarantinepay-agent-demo.mp4 "$work/"
+cp demo/quarantinepay-autonomous-demo.mp4 demo/quarantinepay-real-product-demo.mp4 demo/quarantinepay-agent-demo.mp4 "$work/"
+{ echo "WEBVTT"; echo; sed -E 's/([0-9]{2}:[0-9]{2}:[0-9]{2}),([0-9]{3})/\1.\2/g' demo/quarantinepay-real-product-demo.en.srt; } > "$work/quarantinepay-real-product-demo.en.vtt"
+ffmpeg -loglevel error -y -ss 40 -i demo/quarantinepay-real-product-demo.mp4 -frames:v 1 "$work/poster-product.png"
 # WebVTT captions for the HTML5 <track> element.
 { echo "WEBVTT"; echo; sed -E 's/([0-9]{2}:[0-9]{2}:[0-9]{2}),([0-9]{3})/\1.\2/g' demo/quarantinepay-autonomous-demo.en.srt; } > "$work/quarantinepay-autonomous-demo.en.vtt"
 cp docs/evidence/1-agent-proposal.png docs/evidence/2-injection-policy-hold.png \
-   docs/evidence/3-clean-delivery-captured.png docs/evidence/4-intelligence-grid.png "$work/"
+   docs/evidence/3-clean-delivery-captured.png docs/evidence/4-intelligence-grid.png \
+   docs/evidence/6-real-product-autonomous-capture.png "$work/"
 ffmpeg -loglevel error -y -ss 46 -i demo/quarantinepay-autonomous-demo.mp4 -frames:v 1 "$work/poster.png"
 touch "$work/.nojekyll"
 printf '{"live_url":"%s","updated":"%s"}\n' "$live" "$updated" > "$work/live.json"

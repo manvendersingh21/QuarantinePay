@@ -1,0 +1,75 @@
+1
+00:00:03,800 --> 00:00:05,338
+Now a physical product.
+
+2
+00:00:05,338 --> 00:00:10,619
+I ask my agent for an LED desk lamp under ninety dollars with tracked delivery.
+
+3
+00:00:10,619 --> 00:00:13,160
+My spending mandate is already active.
+
+4
+00:00:14,526 --> 00:00:17,870
+The agent searches real products through Channel3.
+
+5
+00:00:17,870 --> 00:00:20,946
+Only the words LED desk lamp leave the system.
+
+6
+00:00:20,946 --> 00:00:26,430
+Every listing is screened as untrusted data, and anything over budget is excluded.
+
+7
+00:00:27,543 --> 00:00:33,807
+It picks the cheapest eligible real listing and negotiates a delivered price with three reseller agents.
+
+8
+00:00:34,913 --> 00:00:41,393
+The contract binds the exact listing, the retailer, the price, the delivery address and the carrier.
+
+9
+00:00:42,494 --> 00:00:43,588
+No click from me.
+
+10
+00:00:43,588 --> 00:00:49,766
+The purchase fits my mandate, so the agent signs it, and PayPal authorizes from my saved wallet.
+
+11
+00:00:50,885 --> 00:00:52,014
+The reseller ships.
+
+12
+00:00:52,014 --> 00:00:58,013
+QuarantinePay doesn't take the seller's word for it: it needs a delivery proof signed by the carrier.
+
+13
+00:00:58,978 --> 00:01:05,410
+The carrier's signature, the order, the item, the address and the delivered status all check out.
+
+14
+00:01:06,515 --> 00:01:10,811
+So the payment is captured automatically, and PayPal confirms it.
+
+15
+00:01:11,931 --> 00:01:16,731
+On the next order, the seller claims delivery with a proof it signed itself.
+
+16
+00:01:17,684 --> 00:01:19,721
+The carrier signature fails.
+
+17
+00:01:19,721 --> 00:01:24,812
+Nothing is captured: the hold is voided, and PayPal confirms the void.
+
+18
+00:01:25,931 --> 00:01:30,007
+Real products, autonomous buying, independent verification.
+
+19
+00:01:30,007 --> 00:01:33,875
+Agents decide, and PayPal pays only for what was proven.
