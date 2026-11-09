@@ -27,6 +27,7 @@ jobs:
       - run: cargo build --workspace
       - run: cargo test --workspace
       - run: cargo test -p quarantinepay-server --test lifecycle -- --ignored
+      - run: cargo test -p quarantinepay-server --test agent_flow -- --ignored
       - run: cargo test -p quarantinepay-server --bin quarantinepay-server permission_denied_stops_retries -- --ignored
       - run: cargo test -p quarantinepay-server --bin quarantinepay-server local_mirror_search -- --ignored
       - run: cargo build -p quarantinepay-browser --target wasm32-unknown-unknown

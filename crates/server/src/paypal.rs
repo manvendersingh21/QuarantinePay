@@ -16,7 +16,29 @@ impl PayPalFailure {
     pub fn requires_credentials(&self) -> bool {
         matches!(self.status, 401 | 403)
     }
+    /// A refusal that repeating the same request cannot change (e.g. 422 for an operation the
+    /// authorization no longer permits). Timeouts, conflicts, rate limits and 5xx stay retryable.
+    pub fn definitive(&self) -> bool {
+        matches!(self.status, 400 | 401 | 403 | 404 | 422)
+    }
 }
+/// The provider reports an authorization state in which the requested operation is not permitted,
+/// for example a void requested for an authorization PayPal says is already captured or expired.
+#[derive(Debug)]
+pub(crate) struct ProviderStateConflict {
+    pub operation: &'static str,
+    pub provider_status: String,
+}
+impl std::fmt::Display for ProviderStateConflict {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "PayPal reports the authorization as {}; {} is not permitted",
+            self.provider_status, self.operation
+        )
+    }
+}
+impl std::error::Error for ProviderStateConflict {}
 impl std::fmt::Display for PayPalFailure {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
@@ -219,6 +241,17 @@ impl PayPal {
         if !capture && status == "VOIDED" {
             return Ok(auth);
         }
+        if matches!(
+            status,
+            "VOIDED" | "EXPIRED" | "DENIED" | "CAPTURED" | "PARTIALLY_CAPTURED"
+        ) && !(capture && status == "CAPTURED")
+        {
+            return Err(ProviderStateConflict {
+                operation: if capture { "capture" } else { "void" },
+                provider_status: safe_code(&auth["status"]),
+            }
+            .into());
+        }
         ensure!(
             status == "CREATED" || (capture && status == "CAPTURED"),
             "authorization cannot be resolved from {status}"
@@ -299,6 +332,40 @@ pub(crate) async fn mock_resolution_failure(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[tokio::test]
+    async fn void_of_captured_authorization_is_a_state_conflict_not_a_success() {
+        use axum::{
+            Json, Router,
+            routing::{get, post},
+        };
+        let router = Router::new()
+            .route(
+                "/v1/oauth2/token",
+                post(|| async { Json(json!({"access_token":"fake"})) }),
+            )
+            .route(
+                "/v2/payments/authorizations/{id}",
+                get(|| async { Json(json!({"status":"CAPTURED"})) }),
+            )
+            .route(
+                "/v2/payments/authorizations/{id}/void",
+                post(|| async {
+                    // Reaching this would surface as a 418 provider failure, not a conflict.
+                    axum::http::StatusCode::IM_A_TEAPOT
+                }),
+            );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            axum::serve(listener, router).await.unwrap();
+        });
+        let paypal = PayPal::for_test(Client::new(), format!("http://{address}"));
+        let error = paypal.resolve("auth", false, "req").await.unwrap_err();
+        let conflict = error.downcast_ref::<ProviderStateConflict>().unwrap();
+        assert_eq!(conflict.provider_status, "CAPTURED");
+        assert_eq!(conflict.operation, "void");
+        server.abort();
+    }
     #[tokio::test]
     async fn captured_authorization_does_not_fabricate_completed_capture() {
         use axum::{

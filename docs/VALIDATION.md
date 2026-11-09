@@ -1,3 +1,24 @@
+# Validation: agent-contract flow on live PayPal Sandbox (2026-11-09)
+
+Run with `scripts/sandbox-demo.cjs` driving the agent console in headless Chromium, with `QP_MODE=sandbox` and the local `qwen3:30b-instruct` model on a Tesla V100. Sellers and deliveries are fictional; the payments are real PayPal **Sandbox** transactions (test money) to the configured Sandbox merchant. Both stories completed in **167 seconds** of wall-clock time, including model latency and PayPal buyer approval.
+
+| Story | Agent and AI | QuarantinePay result | PayPal Sandbox (fresh API read after the run) |
+| --- | --- | --- | --- |
+| Injected instructions in a structurally valid report | Model planner. Negotiation selected Quillfire Analytics at USD 48.60 (Northstar USD 67.60; Alder declined scope). Analyst: risk `high`, `recommended_action=reject`; rules (3 findings) and the model (grounded quote) both flagged the injected text. | 8/8 structural checks passed, `policy_hold=true`; approving without acknowledgement returned 409; buyer rejected; state `voided`, USD 0.00 captured | Order `8W039741W8964200U` (AUTHORIZE). Authorization `0N41668771224050H`: **VOIDED**, USD 48.60 |
+| Compliant report | Model planner, same contract terms. Analyst: risk `low`, `recommended_action=approve`, no policy hold. | Buyer approved; state `captured` | Order `4AS35513NJ991493X`. Authorization `5XT97367RM571352F`: **CAPTURED**. Capture `2P0047510S322170S`: **COMPLETED**, USD 48.60, `final_capture=true` |
+
+PayPal's `custom_id` on both authorizations equals the ID of the Ed25519-signed intent that embeds the buyer-approved contract (`77756ae9-…` and `b17913d4-…`, SKU `agent-contract-v1`).
+
+An earlier API-driven run the same day also confirmed the same paths: order `3AP08680KJ959245D` / authorization `8YF390610S925722S` (injected delivery, API approval refused with 409, rejected) is **VOIDED** at PayPal, and authorization `4EP33861T7135031R` / capture `1C626993184055022` is **CAPTURED / COMPLETED**. In that run the analyst recommended `reject` for the earlier, less specific compliant fixture because of quality concerns. That was advisory only: no policy hold was set, and the buyer approved the capture. The compliant fixture was then made more specific.
+
+**Failed void on live Sandbox.** To force a void that PayPal must refuse, an agent purchase (order `2fbdf252-…`, authorization `4SM79001VH418320T`, USD 48.60) was taken to buyer review with an injected delivery under a policy hold. The authorization was then captured out of band, directly through the PayPal API (capture `6GA98102D8926882A` COMPLETED), as a merchant might from the PayPal dashboard. When the buyer rejected the delivery, QuarantinePay requested the void, read PayPal's authorization state (`CAPTURED`), recorded `provider_state_conflict` with `claimed_success: false`, and moved the order to `reconciliation_required`. It did not show `voided`, and the console reads "Reconciliation required … no success is claimed" ([screenshot](evidence/5-failed-void-reconciliation.png)). A direct void of that authorization returned PayPal's own refusal, `422 UNPROCESSABLE_ENTITY / PREVIOUSLY_CAPTURED`, and a fresh read still shows `CAPTURED`. Definitive provider refusals (400/404/422) now also stop retries immediately with a `provider_refused` event. Permission refusals (401/403) keep their existing `provider_permission_required` handling.
+
+Screenshots: [proposal](evidence/1-agent-proposal.png), [policy hold](evidence/2-injection-policy-hold.png), [captured](evidence/3-clean-delivery-captured.png), [intelligence grid](evidence/4-intelligence-grid.png). Some full-page captures show the fixed sidebar at the scroll position where the capture was taken.
+
+Automated checks on this build: `cargo fmt --check`, `cargo clippy --workspace --all-targets -D warnings`, `cargo test --workspace`, and the PostgreSQL tests `lifecycle`, `agent_flow`, `permission_denied_stops_retries_and_preserves_authorization` and `local_mirror_search_uses_screened_snapshot` all passed. Not covered: a live 403 permission refusal (mocked test only; the live refusal tested was a provider-state conflict), webhook delivery (no public HTTPS endpoint), Docker builds and Render deployment.
+
+---
+
 > **Historical validation:** The evidence below covers the earlier invoice-only build. It does not establish verification of the five-scenario implementation; run the current tests separately.
 
 # Validation

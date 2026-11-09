@@ -1,9 +1,20 @@
 # QuarantinePay submission draft
 
-QuarantinePay demonstrates buyer-approved purchase terms and delivery-gated settlement for five fictional scenarios: a dataset, report, API data, freelance milestone, and physical goods. A signed intent binds the agreed purchase and acceptance policy. Deterministic checks or explicit buyer review determine the next settlement action; AI has no payment authority.
+**QuarantinePay: the trust layer that lets AI agents safely spend money.**
 
-The default demonstration is a local simulation. Its sellers, goods, delivery evidence, authorization, capture, and void do not represent real commerce or funds. The report checks submitted Markdown text for headings and nonempty sections; the milestone example contains a simulated file name and description rather than uploaded file contents. Their quality requires buyer judgment. Simulated shipping evidence cannot establish product quality. Deadlines are accelerated for the demo. A configured PayPal Sandbox can provide external confirmation of a test payment, but it does not make the fictional goods or delivery real; a failure or ambiguous provider response must never be described as a successful payment.
+QuarantinePay makes autonomous commerce safe by separating what AI agents recommend from what payment systems are allowed to execute. A buyer agent plans a purchase from a plain-English request. A local Qwen3 model does the planning, and a rule parser is the fallback. The agent then negotiates with three seller agents inside a budget it cannot raise. The outcome is a canonical contract, validated by deterministic policy. The buyer approves that exact contract by its SHA-256 digest, and it is signed into an Ed25519 purchase intent. Only then does PayPal Sandbox authorize, or hold, the funds. The seller's delivery is quarantined. Deterministic checks, injection detection and a local AI analyst examine it. Capture happens only after buyer review. A failed check, a rejection or a missed deadline voids the hold. Any embedded instruction aimed at the AI or the payment system triggers a policy hold that only the buyer can override, explicitly, and the override is audited.
 
-The current checked-in video and screenshots predate the five scenarios. Record and validate a new demonstration before using them as evidence for the current application. The optional shopping developer programs, access requirements, and integration boundaries are documented in [developer program research](DEVELOPER_PROGRAMS.md). The optional read-only Shopify connector can retrieve development-store products and test orders; it has not been externally tested here. Shopify orders and QuarantinePay settlement are separate, with no payment linkage.
+The AI has no payment authority. It can propose an objective, and it can add caution by raising risk or recommending rejection. It cannot raise a budget, choose an unlisted seller, alter a signed contract, clear a failed check or a policy hold, or call PayPal.
 
-The Rust application uses PostgreSQL for durable order and audit state. It is a hackathon prototype, not an escrow service, production marketplace, or guarantee of delivery quality. The README contains setup, tests and any known implementation limitations. Verify every claim against the running build and configured provider before publication.
+Boundaries to state plainly:
+
+- Sellers, goods and deliveries are fictional, and the seller agents are deterministic programs. Replay mode simulates payments.
+- Only results returned by PayPal Sandbox count as confirmed. A hold is not escrow. Authorizations expire, and a void can be refused. An earlier test saw `403 PERMISSION_DENIED`, which the app records as `reconciliation_required` and never as a success.
+- Structural checks establish structure and counts, not truth or quality. Injection detection cannot catch every attack.
+- Channel3 is discovery-only and separate from settlement. The read-only Shopify connector is untested live.
+
+**Verification status:** Unit tests cover contract policy, negotiation bounds, signature and policy binding, delivery checks and injection rules. PayPal Sandbox capture and void were confirmed for an *earlier* build (see `VALIDATION.md`). The live Sandbox run of the agent-contract flow, with the local-model planner and analyst, was verified on 2026-11-09: capture `2P0047510S322170S` COMPLETED and the injected-delivery authorization `0N41668771224050H` VOIDED, both by fresh PayPal API reads (`docs/VALIDATION.md`). The Render Blueprint has not been deployed.
+
+Built with Rust, Axum, PostgreSQL, PayPal Orders v2 Sandbox, Ollama Qwen3, AG Grid Community, leptos and WASM.
+
+See the [README](../README.md), [DEMO.md](DEMO.md) and [DEPLOY.md](DEPLOY.md). Verify every claim against the running build before publication.

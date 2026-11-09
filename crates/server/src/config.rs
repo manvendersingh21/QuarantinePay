@@ -43,7 +43,10 @@ impl Config {
         dotenvy::dotenv().ok();
         std::fs::create_dir_all(".local")?;
         use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(".local", std::fs::Permissions::from_mode(0o700))?;
+        // Hosted disks may be mounted with fixed ownership; keep secrets private when possible.
+        if let Err(e) = std::fs::set_permissions(".local", std::fs::Permissions::from_mode(0o700)) {
+            eprintln!("warning: could not restrict .local permissions: {e}");
+        }
         let mode = get("QP_MODE", "replay");
         ensure!(
             ["replay", "sandbox"].contains(&mode.as_str()),
@@ -60,14 +63,17 @@ impl Config {
             password.len() >= 24,
             "QP_ADMIN_PASSWORD must be at least 24 characters"
         );
-        let merchant = get(
-            "PAYPAL_MERCHANT_ID",
-            if mode == "replay" {
-                "replay-merchant"
-            } else {
-                ""
-            },
-        );
+        // An empty value (for example copied from .env.example) means "unset".
+        let merchant = env::var("PAYPAL_MERCHANT_ID")
+            .ok()
+            .filter(|s| !s.trim().is_empty())
+            .unwrap_or_else(|| {
+                if mode == "replay" {
+                    "replay-merchant".into()
+                } else {
+                    String::new()
+                }
+            });
         if mode == "sandbox" {
             for name in [
                 "PAYPAL_CLIENT_ID",
@@ -95,7 +101,17 @@ impl Config {
             inference: crate::inference::InferenceConfig::from_env()?,
             mode,
             base: get("QP_PUBLIC_BASE", "http://localhost:3000"),
-            bind: get("QP_BIND", "127.0.0.1:3000"),
+            // Hosting platforms such as Render provide PORT; an explicit QP_BIND always wins.
+            bind: env::var("QP_BIND")
+                .ok()
+                .filter(|s| !s.is_empty())
+                .or_else(|| {
+                    env::var("PORT")
+                        .ok()
+                        .filter(|p| p.parse::<u16>().is_ok())
+                        .map(|p| format!("0.0.0.0:{p}"))
+                })
+                .unwrap_or_else(|| "127.0.0.1:3000".into()),
             database: env::var("DATABASE_URL").context("DATABASE_URL required")?,
             password,
             key: SigningKey::from_bytes(&key),

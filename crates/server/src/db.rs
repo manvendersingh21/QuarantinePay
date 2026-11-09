@@ -22,6 +22,9 @@ pub struct Order {
     pub review_decision: Option<String>,
     pub simulation_outcome: String,
     pub updated_at: chrono::DateTime<chrono::Utc>,
+    pub analysis: Option<Value>,
+    pub risk_override: bool,
+    pub created_at: chrono::DateTime<chrono::Utc>,
 }
 pub async fn event(pool: &PgPool, id: Option<Uuid>, kind: &str, detail: Value) -> Result<()> {
     sqlx::query("INSERT INTO events(order_id,buyer,kind,detail) VALUES($1,'demo-buyer',$2,$3)")
@@ -45,5 +48,17 @@ pub async fn event_tx(
         .bind(detail)
         .execute(&mut **tx)
         .await?;
+    Ok(())
+}
+
+pub async fn task_event(pool: &PgPool, task: Uuid, kind: &str, detail: Value) -> Result<()> {
+    sqlx::query(
+        "INSERT INTO events(order_id,task_id,buyer,kind,detail) VALUES(NULL,$1,'demo-buyer',$2,$3)",
+    )
+    .bind(task)
+    .bind(kind)
+    .bind(detail)
+    .execute(pool)
+    .await?;
     Ok(())
 }

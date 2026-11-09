@@ -56,7 +56,68 @@ async fn verify(app: &App, artifact: &Value) -> Result<Verdict> {
     );
     Ok(verdict)
 }
+fn deadline_seconds(signed: &SignedIntent) -> i64 {
+    if let Some(c) = &signed.intent.contract {
+        return c.deadline_seconds as i64;
+    }
+    signed
+        .intent
+        .scenario
+        .as_ref()
+        .map_or(120_i64, |s| s.deadline_seconds as i64)
+}
+fn review_required(signed: &SignedIntent) -> bool {
+    signed.intent.contract.is_some()
+        || signed
+            .intent
+            .scenario
+            .as_ref()
+            .is_some_and(|s| s.review_required)
+}
+type AnalysisRow = (
+    String,
+    Value,
+    Option<Value>,
+    Option<Value>,
+    Option<chrono::DateTime<chrono::Utc>>,
+);
+/// Model analysis can take seconds, so it runs before the row lock is taken. It is advisory and is
+/// recorded only if the order is still quarantined with the same evidence when the lock is held.
+async fn pre_analysis(app: &App, id: uuid::Uuid) -> Result<Option<Value>> {
+    let row: Option<AnalysisRow> = sqlx::query_as(
+        "SELECT state,intent,artifact,analysis,deadline FROM orders WHERE id=$1 AND mode=$2",
+    )
+    .bind(id)
+    .bind(&app.config.mode)
+    .fetch_optional(&app.pool)
+    .await?;
+    let Some((state, intent, Some(artifact), None, deadline)) = row else {
+        return Ok(None);
+    };
+    if state != "quarantined" || deadline.is_none_or(|t| t <= chrono::Utc::now()) {
+        return Ok(None);
+    }
+    let signed: SignedIntent = serde_json::from_value(intent)?;
+    let Some(contract) = signed.intent.contract else {
+        return Ok(None);
+    };
+    let verdict = quarantinepay_core::contract::verify_contract_delivery(&contract, &artifact);
+    if !verdict.passed {
+        return Ok(None);
+    }
+    db::event(
+        &app.pool,
+        Some(id),
+        "ai_analysis_started",
+        json!({"analyst":crate::inference::model_label(&app.config.inference),"payment_authority":false}),
+    )
+    .await?;
+    Ok(Some(
+        crate::analyst::analyze(app, &contract, &artifact, &verdict).await,
+    ))
+}
 async fn process(app: &App, id: uuid::Uuid) -> Result<()> {
+    let analysis = pre_analysis(app, id).await?;
     let mut tx = app.pool.begin().await?;
     // Transaction-scoped advisory lock avoids duplicate provider effects across worker instances.
     let locked: bool =
@@ -119,29 +180,59 @@ async fn process(app: &App, id: uuid::Uuid) -> Result<()> {
         let verdict = if expired {
             json!({"passed":false,"reason":"verification deadline expired"})
         } else {
-            match if let Some(terms) = &signed.intent.scenario {
-                Ok(quarantinepay_core::verify_scenario(
+            match if let Some(contract) = &signed.intent.contract {
+                Ok(serde_json::to_value(
+                    quarantinepay_core::contract::verify_contract_delivery(
+                        contract,
+                        order.artifact.as_ref().unwrap(),
+                    ),
+                )?)
+            } else if let Some(terms) = &signed.intent.scenario {
+                Ok(serde_json::to_value(quarantinepay_core::verify_scenario(
                     &terms.id,
                     order.artifact.as_ref().unwrap(),
-                ))
+                ))?)
             } else {
-                verify(app, order.artifact.as_ref().unwrap()).await
+                verify(app, order.artifact.as_ref().unwrap())
+                    .await
+                    .and_then(|v| Ok(serde_json::to_value(v)?))
             } {
-                Ok(v) => serde_json::to_value(v)?,
+                Ok(v) => v,
                 Err(_) => json!({"passed":false,"reason":"verifier failed or timed out"}),
             }
         };
         let capture =
             verdict["passed"] == true && order.deadline.is_some_and(|t| t > chrono::Utc::now());
-        if capture
-            && signed
-                .intent
-                .scenario
-                .as_ref()
-                .is_some_and(|s| s.review_required)
-        {
-            sqlx::query("UPDATE orders SET state='buyer_review',verification=$2,updated_at=now() WHERE id=$1").bind(id).bind(&verdict).execute(&mut *tx).await?;
+        if capture && review_required(&signed) {
+            let analysis = if signed.intent.contract.is_some() {
+                // Wait for the analyst; the deadline still applies while it runs.
+                let Some(analysis) = analysis else {
+                    return Ok(());
+                };
+                Some(analysis)
+            } else {
+                None
+            };
+            sqlx::query("UPDATE orders SET state='buyer_review',verification=$2,analysis=$3,updated_at=now() WHERE id=$1").bind(id).bind(&verdict).bind(&analysis).execute(&mut *tx).await?;
             db::event_tx(&mut tx, Some(id), "verification_complete", verdict).await?;
+            if let Some(a) = &analysis {
+                db::event_tx(
+                    &mut tx,
+                    Some(id),
+                    "ai_analysis_complete",
+                    json!({"risk":a["risk"],"injection_detected":a["injection_detected"],"recommended_action":a["recommended_action"],"analyst":a["analyst"]["source"],"payment_authority":false}),
+                )
+                .await?;
+                if a["policy_hold"] == true {
+                    db::event_tx(
+                        &mut tx,
+                        Some(id),
+                        "policy_hold",
+                        json!({"reason":"Untrusted instructions detected in the delivery; capture requires an explicit buyer override","findings":a["findings"]}),
+                    )
+                    .await?;
+                }
+            }
             db::event_tx(
                 &mut tx,
                 Some(id),
@@ -274,7 +365,7 @@ async fn process(app: &App, id: uuid::Uuid) -> Result<()> {
                     let auth_id = auth["id"]
                         .as_str()
                         .ok_or_else(|| anyhow::anyhow!("missing authorization ID"))?;
-                    sqlx::query("UPDATE orders SET state='authorized',authorization_id=$2,deadline=now()+($4 * interval '1 second'),provider_result=$3,updated_at=now() WHERE id=$1").bind(id).bind(auth_id).bind(&value).bind(signed.intent.scenario.as_ref().map_or(120_i64, |s| s.deadline_seconds as i64)).execute(&mut *tx).await?;
+                    sqlx::query("UPDATE orders SET state='authorized',authorization_id=$2,deadline=now()+($4 * interval '1 second'),provider_result=$3,updated_at=now() WHERE id=$1").bind(id).bind(auth_id).bind(&value).bind(deadline_seconds(&signed)).execute(&mut *tx).await?;
                 }
                 _ => {
                     let capture = order.state == "capture_pending";
@@ -295,7 +386,28 @@ async fn process(app: &App, id: uuid::Uuid) -> Result<()> {
             tx.commit().await?;
         }
         Err(error) => {
-            if let Some(failure) = error
+            if let Some(conflict) = error.downcast_ref::<crate::paypal::ProviderStateConflict>() {
+                // The provider's own state forbids this operation. Record what PayPal reported and
+                // stop; never mark the order voided or captured on our side.
+                sqlx::query("UPDATE orders SET state='reconciliation_required' WHERE id=$1")
+                    .bind(id)
+                    .execute(&mut *tx)
+                    .await?;
+                db::event_tx(&mut tx,Some(id),"provider_state_conflict",json!({"operation":order.operation,"mode":app.config.mode,"provider_status":conflict.provider_status,"claimed_success":false})).await?;
+                tx.commit().await?;
+                tracing::warn!(%id,error=%error,"provider state conflict; reconciliation required");
+            } else if let Some(failure) = error
+                .downcast_ref::<crate::paypal::PayPalFailure>()
+                .filter(|f| f.definitive() && !f.requires_credentials())
+            {
+                sqlx::query("UPDATE orders SET state='reconciliation_required' WHERE id=$1")
+                    .bind(id)
+                    .execute(&mut *tx)
+                    .await?;
+                db::event_tx(&mut tx,Some(id),"provider_refused",json!({"operation":order.operation,"mode":app.config.mode,"status":failure.status,"code":failure.name,"issues":failure.issues,"debug_id":failure.debug_id,"claimed_success":false})).await?;
+                tx.commit().await?;
+                tracing::warn!(%id,error=%error,"provider refused the operation; reconciliation required");
+            } else if let Some(failure) = error
                 .downcast_ref::<crate::paypal::PayPalFailure>()
                 .filter(|f| f.requires_credentials())
             {
@@ -387,6 +499,7 @@ mod tests {
                 expires_at: chrono::Utc::now().timestamp() + 900,
                 policy_digest: policy_digest(),
                 scenario: None,
+                contract: None,
             },
             &config.key,
         )
