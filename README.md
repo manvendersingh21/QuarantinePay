@@ -165,7 +165,8 @@ CI ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)) runs these checks, i
 | Local Qwen3 planner and analyst on the agent flow | **Verified 2026-11-09** on a V100. Injected report: high risk, reject, policy hold. Compliant report: low risk, approve |
 | Failed void on live Sandbox | **Verified 2026-11-09.** Authorization `4SM79001VH418320T` was captured out of band; the buyer's reject led to `provider_state_conflict` and `reconciliation_required`, with no success claimed. PayPal itself refused the void with 422 `PREVIOUSLY_CAPTURED`. A 403 permission refusal is covered by a mocked test |
 | Public deployment | **Live 2026-11-09** via Cloudflare quick tunnel at https://deck-com-range-occasional.trycloudflare.com (temporary URL). The full Sandbox demo passed through the public URL: void `64L774879U300943H` VOIDED, capture on `0EV5186317836644V` CAPTURED |
-| Render deployment | Blueprint provided; not deployed |
+| Render deployment | Blueprint provided; not deployed. The Docker image is unbuilt because containers cannot run on the dev host; the Dockerfile steps were replicated natively and smoke-tested |
+| Live provider credential refusal on void | **Verified 2026-11-09**: a real PayPal `401 invalid_client` led to `provider_permission_required` and `reconciliation_required`, with the authorization preserved and no success claimed |
 
 Earlier testing saw a void refused with `403 PERMISSION_DENIED`. The app recorded `provider_permission_required`, moved the order to `reconciliation_required` and did not claim success. Any unresolved provider outcome is handled the same way.
 
