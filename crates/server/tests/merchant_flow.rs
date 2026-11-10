@@ -76,6 +76,11 @@ fn shopify(state: State) -> Router {
                 s.orders
                     .insert(gid.clone(), (tag, variant, "open", String::new()));
                 json!({"orderCreate":{"order":{"id":gid,"name":format!("#{}", 1000 + s.created)},"userErrors":[]}})
+            } else if q.contains("transactions{") {
+                let gid = v["id"].as_str().unwrap();
+                let paid = s.settled.get(gid) == Some(&"paid");
+                json!({"order":{"displayFinancialStatus": if paid { "PAID" } else { "AUTHORIZED" },
+                    "transactions":[{"id":"gid://shopify/OrderTransaction/1","kind":"AUTHORIZATION","status":"SUCCESS","amountSet":{"shopMoney":{"amount":"34.0","currencyCode":"USD"}}}]}})
             } else if q.contains("order(id:") {
                 let gid = v["id"].as_str().unwrap();
                 let (tag, variant, st, company) = s.orders.get(gid).cloned().unwrap();
@@ -87,10 +92,15 @@ fn shopify(state: State) -> Router {
                     "shippingAddress":{"address1":"2211 N First St","city":"San Jose","provinceCode":"CA","zip":"95131","countryCodeV2":"US"},
                     "fulfillments": if st == "fulfilled" { json!([{"status":"SUCCESS","displayStatus":"FULFILLED","createdAt":"2026-11-10T00:00:00Z","deliveredAt":null,"trackingInfo":[{"number":"1Z999AA10123456784","company":company,"url":null}]}]) } else { json!([]) },
                 }})
-            } else if q.contains("orderMarkAsPaid") {
+            } else if q.contains("orderCapture") {
+                assert_eq!(
+                    v["input"]["parentTransactionId"],
+                    "gid://shopify/OrderTransaction/1"
+                );
+                assert_eq!(v["input"]["amount"], "34.0");
                 s.settled
                     .insert(v["input"]["id"].as_str().unwrap().into(), "paid");
-                json!({"orderMarkAsPaid":{"order":{"displayFinancialStatus":"PAID"},"userErrors":[]}})
+                json!({"orderCapture":{"transaction":{"id":"gid://shopify/OrderTransaction/2","status":"SUCCESS","order":{"displayFinancialStatus":"PAID"}},"userErrors":[]}})
             } else if q.contains("orderCancel") {
                 s.settled
                     .insert(v["id"].as_str().unwrap().into(), "cancelled");
@@ -336,12 +346,13 @@ async fn merchant_fulfilment_gates_capture() {
         .unwrap();
     state(&c, &base, &order, "captured").await;
     wait(&c, format!("{base}/api/orders/{order}"), |o| {
-        o["shopify_settlement"]["action"] == "marked_paid"
+        o["shopify_settlement"]["action"] == "capture_recorded"
     })
     .await;
     assert_eq!(shop.lock().unwrap().settled.get(&gid), Some(&"paid"));
 
-    // The merchant cancels: the hold is voided and the Shopify order mirrored as cancelled.
+    // The merchant cancels: the hold is voided; the Shopify order is already cancelled, so nothing
+    // is cancelled twice.
     let (_, order, gid) = purchase(&c, &base, None).await;
     set(&shop, &gid, "cancelled", "");
     let v = state(&c, &base, &order, "voided").await;
@@ -352,9 +363,10 @@ async fn merchant_fulfilment_gates_capture() {
             .contains("not_cancelled")
     );
     wait(&c, format!("{base}/api/orders/{order}"), |o| {
-        o["shopify_settlement"]["action"] == "cancelled"
+        o["shopify_settlement"]["action"] == "already_cancelled"
     })
     .await;
+    assert_eq!(shop.lock().unwrap().settled.get(&gid), None);
 
     // Under a mandate: a clean fulfilment auto-captures; tracking text that addresses the verifier
     // is held for the buyer and cannot be approved without an explicit override.

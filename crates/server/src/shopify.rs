@@ -86,6 +86,11 @@ async fn bounded(mut response: reqwest::Response) -> Result<Value> {
     serde_json::from_slice(&body).map_err(|_| anyhow::anyhow!("invalid Shopify response"))
 }
 
+fn token_cache() -> &'static Mutex<Option<(String, Instant)>> {
+    static CACHE: OnceLock<Mutex<Option<(String, Instant)>>> = OnceLock::new();
+    CACHE.get_or_init(|| Mutex::new(None))
+}
+
 /// A fixed Admin API token if one is configured; otherwise the app's client-credentials grant,
 /// cached until shortly before it expires (Shopify issues them for 24 hours).
 async fn token() -> Result<String> {
@@ -93,8 +98,7 @@ async fn token() -> Result<String> {
     if !fixed.is_empty() {
         return Ok(fixed);
     }
-    static CACHE: OnceLock<Mutex<Option<(String, Instant)>>> = OnceLock::new();
-    let mut cache = CACHE.get_or_init(|| Mutex::new(None)).lock().await;
+    let mut cache = token_cache().lock().await;
     if let Some((t, until)) = cache.as_ref()
         && *until > Instant::now()
     {
@@ -134,16 +138,26 @@ async fn token() -> Result<String> {
 }
 
 async fn gql(query: &str, variables: Value) -> Result<Value> {
-    let response = client()
-        .post(format!(
-            "{}/admin/api/{VERSION}/graphql.json",
-            admin_base()?
-        ))
-        .header("X-Shopify-Access-Token", token().await?)
-        .json(&json!({"query":query,"variables":variables}))
-        .send()
-        .await
-        .map_err(|_| anyhow::anyhow!("Shopify request failed"))?;
+    let body = json!({"query":query,"variables":variables});
+    let url = format!("{}/admin/api/{VERSION}/graphql.json", admin_base()?);
+    let mut response = None;
+    for attempt in 0..2 {
+        let r = client()
+            .post(&url)
+            .header("X-Shopify-Access-Token", token().await?)
+            .json(&body)
+            .send()
+            .await
+            .map_err(|_| anyhow::anyhow!("Shopify request failed"))?;
+        // A reinstall revokes the cached token: drop it and ask for a new one, once.
+        if r.status() == reqwest::StatusCode::UNAUTHORIZED && attempt == 0 {
+            *token_cache().lock().await = None;
+            continue;
+        }
+        response = Some(r);
+        break;
+    }
+    let response = response.ok_or_else(|| anyhow::anyhow!("Shopify request failed"))?;
     ensure!(
         response.status().is_success(),
         "Shopify request was rejected (HTTP {})",
@@ -382,12 +396,31 @@ pub async fn snapshot(order_gid: &str) -> Result<Value> {
 pub async fn settle(order_gid: &str, captured: bool) -> Result<Value> {
     ensure_development_store().await?;
     if captured {
+        // Record the capture against the AUTHORIZATION transaction placed with the order, so the
+        // merchant's books show the same authorize -> capture sequence PayPal does.
         let d = gql(
-            "mutation($input: OrderMarkAsPaidInput!){ orderMarkAsPaid(input:$input){ order{ displayFinancialStatus } userErrors{ field message } } }",
-            json!({"input":{"id":order_gid}}),
+            "query($id:ID!){ order(id:$id){ displayFinancialStatus transactions{ id kind status amountSet{ shopMoney{ amount currencyCode } } } } }",
+            json!({"id":order_gid}),
         )
         .await?;
-        let r = &d["orderMarkAsPaid"];
+        if d["order"]["displayFinancialStatus"] == "PAID" {
+            return Ok(json!({"action":"already_paid","financial_status":"PAID"}));
+        }
+        let auth = d["order"]["transactions"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .find(|t| t["kind"] == "AUTHORIZATION" && t["status"] == "SUCCESS")
+            .ok_or_else(|| {
+                anyhow::anyhow!("Shopify order has no successful authorization to capture")
+            })?;
+        let money = &auth["amountSet"]["shopMoney"];
+        let d = gql(
+            "mutation($input: OrderCaptureInput!){ orderCapture(input:$input){ transaction{ id status order{ displayFinancialStatus } } userErrors{ field message } } }",
+            json!({"input":{"id":order_gid,"parentTransactionId":auth["id"],"amount":money["amount"],"currency":money["currencyCode"]}}),
+        )
+        .await?;
+        let r = &d["orderCapture"];
         let errors = r["userErrors"].as_array().cloned().unwrap_or_default();
         ensure!(
             errors.is_empty(),
@@ -398,10 +431,21 @@ pub async fn settle(order_gid: &str, captured: bool) -> Result<Value> {
                 .collect::<Vec<_>>()
                 .join("; ")
         );
-        Ok(
-            json!({"action":"marked_paid","financial_status":text(&r["order"]["displayFinancialStatus"],40)}),
-        )
+        Ok(json!({
+            "action":"capture_recorded",
+            "transaction":text(&r["transaction"]["id"],200),
+            "financial_status":text(&r["transaction"]["order"]["displayFinancialStatus"],40),
+        }))
     } else {
+        // The merchant may have cancelled first (that is what voided the hold): nothing to mirror.
+        let d = gql(
+            "query($id:ID!){ order(id:$id){ cancelledAt } }",
+            json!({"id":order_gid}),
+        )
+        .await?;
+        if let Some(at) = d["order"]["cancelledAt"].as_str() {
+            return Ok(json!({"action":"already_cancelled","cancelled_at":text(&json!(at),40)}));
+        }
         let d = gql(
             "mutation($id:ID!){ orderCancel(orderId:$id, reason:DECLINED, restock:true, notifyCustomer:false, refundMethod:{originalPaymentMethodsRefund:false}, staffNote:\"QuarantinePay voided the PayPal authorization\"){ job{ id } orderCancelUserErrors{ field message } } }",
             json!({"id":order_gid}),

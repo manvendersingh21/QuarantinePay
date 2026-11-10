@@ -1442,8 +1442,14 @@ fn merchant_delivery(task: &Value) -> String {
         h.push_str(&format!(
             r#"<p class="muted small">Merchant's books: {}</p>"#,
             esc(&match str_of(&settled["action"]) {
-                "marked_paid" => "Shopify order marked paid after PayPal captured.".to_string(),
+                "capture_recorded" | "already_paid" => {
+                    "PayPal's capture recorded against the Shopify order's authorization (paid)."
+                        .to_string()
+                }
                 "cancelled" => "Shopify order cancelled after PayPal voided the hold.".to_string(),
+                "already_cancelled" => {
+                    "The merchant had cancelled the Shopify order; PayPal hold voided.".to_string()
+                }
                 _ => format!(
                     "could not update the Shopify order ({})",
                     truncate(&text(&settled["error"]), 200)

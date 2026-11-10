@@ -15,6 +15,7 @@ import json
 import os
 import re
 import sys
+import time
 import urllib.parse
 import urllib.request
 
@@ -78,13 +79,16 @@ def find(ref):
     if ref.startswith("gid://shopify/Order/"):
         return ref
     name = ref if ref.startswith("#") else f"#{ref}"
-    nodes = gql(
-        "query($q:String!){ orders(first:1, query:$q){ nodes{ id } } }",
-        {"q": f"name:{name} tag:quarantinepay"},
-    )["orders"]["nodes"]
-    if not nodes:
-        sys.exit(f"no QuarantinePay order named {name}")
-    return nodes[0]["id"]
+    # Order search is indexed a few seconds after creation; retry briefly.
+    for _ in range(10):
+        nodes = gql(
+            "query($q:String!){ orders(first:1, query:$q){ nodes{ id } } }",
+            {"q": f"name:{name} tag:quarantinepay"},
+        )["orders"]["nodes"]
+        if nodes:
+            return nodes[0]["id"]
+        time.sleep(2)
+    sys.exit(f"no QuarantinePay order named {name}")
 
 
 def errors(r, key="userErrors"):
