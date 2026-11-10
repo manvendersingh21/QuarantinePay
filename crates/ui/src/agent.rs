@@ -2318,7 +2318,7 @@ fn request_box(active_mandate: Option<&Value>) -> String {
             r#"<label for="agent-request"><span class="eyebrow">NEW BUYER TASK</span><h2>What should the buyer agent buy?</h2></label>"#,
             r#"<textarea id="agent-request" name="request" maxlength="2000" rows="3" aria-describedby="request-hint" required>{}</textarea>"#,
             r#"<p id="request-hint" class="muted small request-hint">Research reports or real products. Try also: <q>{}</q></p>"#,
-            r#"<label class="check external-discovery"><input type="checkbox" name="external_discovery" value="true" checked/><span>Search real products via Channel3 (sends only the product search terms)</span></label>{}"#,
+            r#"<label class="check external-discovery"><input type="checkbox" name="external_discovery" value="true" checked/><span>Search real products: a connected Shopify merchant first, otherwise Channel3 (sends only the product search terms)</span></label>{}"#,
             r#"<div class="request-foot"><p class="muted small">{}</p>"#,
             r#"<button class="primary-lg">Run buyer agent</button></div></form></section>"#
         ),
@@ -3106,7 +3106,7 @@ mod tests {
         ));
         assert!(
             html.contains(
-                "Search real products via Channel3 (sends only the product search terms)"
+                "Search real products: a connected Shopify merchant first, otherwise Channel3 (sends only the product search terms)"
             )
         );
         assert!(html.contains(EXAMPLE_PRODUCT_REQUEST));
