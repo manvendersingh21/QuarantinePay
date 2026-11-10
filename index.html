@@ -54,7 +54,7 @@ a{color:var(--mint)}
 <a class="btn secondary" href="https://github.com/manvendersingh21/QuarantinePay">Source code</a>
 <a class="btn secondary" href="https://github.com/manvendersingh21/QuarantinePay/blob/main/docs/VALIDATION.md">Verification evidence</a>
 </div>
-<p class="note">The live demo runs the full stack (Rust gateway, local Qwen3 model on a GPU, real PayPal <strong>Sandbox</strong>) behind a Cloudflare tunnel; sign-in required. Live link last updated 2026-11-09 23:52 UTC. If it doesn't load, the video below shows the same flow.</p>
+<p class="note">The live demo runs the full stack (Rust gateway, local Qwen3 model on a GPU, real PayPal <strong>Sandbox</strong>) behind a Cloudflare tunnel; sign-in required. Live link last updated 2026-11-10 23:16 UTC. If it doesn't load, the video below shows the same flow.</p>
 
 <video controls preload="metadata" poster="poster.png">
 <source src="quarantinepay-autonomous-demo.mp4" type="video/mp4">
@@ -68,6 +68,13 @@ a{color:var(--mint)}
 <track kind="captions" src="quarantinepay-real-product-demo.en.vtt" srclang="en" label="English">
 </video>
 
+<h2>Buying from a real Shopify merchant</h2>
+<p class="note">The agent searches a live Shopify store first. It withholds a listing whose description tries to instruct it, and buys the lamp at the store's own price with no click. PayPal authorizes before the Shopify order exists. A seller's "delivered" claim is refused. Payment is captured only when QuarantinePay's own read of the merchant's Shopify order shows the exact item fulfilled with tracking to the buyer. Then Shopify is updated to match PayPal. This runs on a development store with test orders; the fulfilment is the merchant's own record, not carrier proof.</p>
+<div class="shots">
+<a href="7-shopify-discovery.png"><img src="7-shopify-discovery.png" alt="Live Shopify catalog: injected listing withheld, store-price lamp selected" loading="lazy"></a>
+<a href="8-shopify-fulfilment-captured.png"><img src="8-shopify-fulfilment-captured.png" alt="Merchant fulfilment verified from the Shopify order, captured automatically" loading="lazy"></a>
+</div>
+
 <h2>What the AI can and cannot do</h2>
 <div class="grid">
 <div class="card"><h3>Plans and negotiates</h3><p>A local model extracts budget and scope; the buyer's own written amount is a hard cap. Seller agents negotiate within budget and floors.</p></div>
@@ -76,9 +83,13 @@ a{color:var(--mint)}
 <div class="card"><h3>Honest outcomes</h3><p>Uncertain or refused provider results become <code>reconciliation_required</code>, never a claimed success.</p></div>
 </div>
 
-<h2>Verified on live PayPal Sandbox (2026-11-09)</h2>
+<h2>Verified on live PayPal Sandbox (2026-11-09 and 2026-11-10)</h2>
 <div class="table-wrap"><table>
 <tr><th>Story</th><th>What happened</th><th>PayPal (fresh API read)</th></tr>
+<tr><td>Real Shopify merchant, fulfilled</td><td>Live store catalog, injected listing withheld; order #1003 placed after authorization, fulfilled by the merchant, 7/7 checks on QuarantinePay's own Shopify read; auto-captured, Shopify shows PAID</td><td><span class="ok">CAPTURED</span> · capture <code>50202684975363011</code> COMPLETED</td></tr>
+<tr><td>Real Shopify merchant, injected tracking text</td><td>Order #1005 fulfilled with tracking text addressed to the verifier: policy hold, approval refused (409), buyer rejects, Shopify order cancelled</td><td><span class="ok">VOIDED</span> · authorization <code>4DA0671291327382M</code></td></tr>
+<tr><td>Real Shopify merchant never fulfils</td><td>Order #1006 passes its 15-minute deadline; QuarantinePay voids and cancels the Shopify order</td><td><span class="ok">VOIDED</span> · authorization <code>38205732K7846941U</code></td></tr>
+<tr><td>Real Shopify merchant cancels</td><td>Order #1004 cancelled in Shopify; <code>not_cancelled</code> fails</td><td><span class="ok">VOIDED</span> · authorization <code>0WW634460G511763A</code></td></tr>
 <tr><td>Real product (Channel3), autonomous, carrier-verified</td><td>Bostitch LED Desk Lamp from staples.com via reseller; carrier-signed delivery verified; auto-captured</td><td><span class="ok">CAPTURED</span> · capture <code>04809152F1907772J</code> COMPLETED</td></tr>
 <tr><td>Real product, forged delivery proof</td><td>Seller-signed "proof" fails the carrier signature check</td><td><span class="ok">VOIDED</span> · authorization <code>9NE674699R6537024</code></td></tr>
 <tr><td>Autonomous purchase under a mandate</td><td>No approval click: mandate check passes, vault authorization, clean delivery auto-captured</td><td><span class="ok">CAPTURED</span> · capture <code>4M512246EX858693T</code> COMPLETED</td></tr>
