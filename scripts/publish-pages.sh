@@ -20,7 +20,9 @@ if [ ! -d "$work/.git" ] && [ ! -f "$work/.git" ]; then
 fi
 updated="$(date -u '+%Y-%m-%d %H:%M UTC')"
 sed -e "s#__LIVE_URL__#${live}#g" -e "s#__UPDATED__#${updated}#g" site/index.html > "$work/index.html"
-cp demo/quarantinepay-autonomous-demo.mp4 demo/quarantinepay-real-product-demo.mp4 demo/quarantinepay-agent-demo.mp4 "$work/"
+cp demo/quarantinepay-autonomous-demo.mp4 demo/quarantinepay-real-product-demo.mp4 demo/quarantinepay-agent-demo.mp4 demo/quarantinepay-shopify-demo.mp4 "$work/"
+{ echo "WEBVTT"; echo; sed -E 's/([0-9]{2}:[0-9]{2}:[0-9]{2}),([0-9]{3})/\1.\2/g' demo/quarantinepay-shopify-demo.en.srt; } > "$work/quarantinepay-shopify-demo.en.vtt"
+ffmpeg -loglevel error -y -ss 21 -i demo/quarantinepay-shopify-demo.mp4 -frames:v 1 "$work/poster-shopify.png"
 { echo "WEBVTT"; echo; sed -E 's/([0-9]{2}:[0-9]{2}:[0-9]{2}),([0-9]{3})/\1.\2/g' demo/quarantinepay-real-product-demo.en.srt; } > "$work/quarantinepay-real-product-demo.en.vtt"
 ffmpeg -loglevel error -y -ss 40 -i demo/quarantinepay-real-product-demo.mp4 -frames:v 1 "$work/poster-product.png"
 # WebVTT captions for the HTML5 <track> element.

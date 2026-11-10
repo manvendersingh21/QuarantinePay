@@ -37,6 +37,8 @@ Listings and prices are real; resellers, fulfilment and the carrier are simulate
 
 ### Buying from a real Shopify merchant
 
+**Video:** [`demo/quarantinepay-shopify-demo.mp4`](demo/quarantinepay-shopify-demo.mp4) (2:03, narrated, recorded live: Shopify development store, PayPal Sandbox, with the store owner's admin view).
+
 When a Shopify development store is connected, the agent shops it **first**. It searches the store's live catalog, screens every listing as untrusted text, and proposes a fixed-price contract with that merchant at exactly the listed price.
 
 - **Order after authorization:** QuarantinePay creates the Shopify order only after PayPal has authorized the payment. The order is created as `AUTHORIZED`, as a test order, with the PayPal authorization ID on its transaction and a `qp-<order id>` tag. Creation is idempotent.
