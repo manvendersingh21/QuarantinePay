@@ -78,7 +78,7 @@ Deterministic checks: `.md` file name; 64 KiB limit; each required `# Heading` p
 | PayPal Sandbox (`QP_MODE=sandbox`) | Orders v2 authorize, capture and void. Never production. Only provider-returned results count as confirmed. Agent flow: verified on 2026-11-09 (capture COMPLETED, injected-delivery void VOIDED; see `docs/VALIDATION.md`). |
 | Local LLM (Qwen3-30B via Ollama, loopback only) | Planner and analyst. Rule fallback when unavailable. No payment authority. |
 | Channel3 | Discovery-only catalog import, separate from settlement. |
-| Shopify dev store | Read-only and untested live. Not linked to settlement. |
+| Shopify dev store | Merchant seller. Live catalog discovery; the order is placed only after PayPal authorization; capture is gated on QuarantinePay's own read of the merchant's fulfilment; PayPal's outcome is mirrored back (orderCapture or orderCancel). Writes only to a `partnerDevelopment` store. Verified live 2026-11-10. |
 | Render | Blueprint provided (`render.yaml`). Not deployed. No GPU, so the rule fallback is used there. |
 
 ## 10. Architecture
@@ -96,7 +96,7 @@ Not escrow (a hold is not escrow). Not a production marketplace or payment servi
 - PayPal authorizations expire and voids can be refused. An earlier test saw `403 PERMISSION_DENIED` on void, which the app handles as `reconciliation_required`. No automatic reconciliation job exists.
 - Render deployment is untested. Without a persistent disk, the signing key is regenerated on every deploy.
 - The checked-in videos show earlier builds. Re-record using `docs/DEMO.md`.
-- Shopify connector untested live. Single admin and single buyer.
+- Shopify fulfilment evidence is the merchant's own record, not carrier proof; development store and test orders only. Single admin and single buyer.
 
 ## 13. Docs map
 

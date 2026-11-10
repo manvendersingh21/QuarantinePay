@@ -27,7 +27,8 @@ ffmpeg -loglevel error -y -ss 40 -i demo/quarantinepay-real-product-demo.mp4 -fr
 { echo "WEBVTT"; echo; sed -E 's/([0-9]{2}:[0-9]{2}:[0-9]{2}),([0-9]{3})/\1.\2/g' demo/quarantinepay-autonomous-demo.en.srt; } > "$work/quarantinepay-autonomous-demo.en.vtt"
 cp docs/evidence/1-agent-proposal.png docs/evidence/2-injection-policy-hold.png \
    docs/evidence/3-clean-delivery-captured.png docs/evidence/4-intelligence-grid.png \
-   docs/evidence/6-real-product-autonomous-capture.png "$work/"
+   docs/evidence/6-real-product-autonomous-capture.png docs/evidence/7-shopify-discovery.png \
+   docs/evidence/8-shopify-fulfilment-captured.png "$work/"
 ffmpeg -loglevel error -y -ss 46 -i demo/quarantinepay-autonomous-demo.mp4 -frames:v 1 "$work/poster.png"
 touch "$work/.nojekyll"
 printf '{"live_url":"%s","updated":"%s"}\n' "$live" "$updated" > "$work/live.json"

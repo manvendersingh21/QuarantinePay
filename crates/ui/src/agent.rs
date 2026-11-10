@@ -2007,6 +2007,18 @@ const PRODUCT_STEP_TITLES: [&str; 9] = [
     "Settlement",
 ];
 
+const MERCHANT_STEP_TITLES: [&str; 9] = [
+    "Understand",
+    "Discover real products",
+    "Confirm the merchant's price",
+    "Contract",
+    "Buyer approval",
+    "PayPal authorization",
+    "Merchant order",
+    "Merchant fulfilment verification",
+    "Settlement",
+];
+
 fn pipeline(task: &Value, replay: bool, events: &[Value]) -> String {
     let mut stages = progress(task);
     autonomy_labels(&mut stages, task, events);
@@ -2021,7 +2033,9 @@ fn pipeline(task: &Value, replay: bool, events: &[Value]) -> String {
         verification(task),
         settlement(task, events),
     ];
-    let titles = if is_product(task) {
+    let titles = if is_merchant(task) {
+        &MERCHANT_STEP_TITLES
+    } else if is_product(task) {
         &PRODUCT_STEP_TITLES
     } else {
         &STEP_TITLES
@@ -2995,6 +3009,23 @@ mod tests {
         let report = page("REPLAY", reviewed_task("REPLAY", "authorized"));
         assert!(report.contains("Deliver compliant report"));
         assert!(!report.contains("forged"));
+    }
+
+    #[test]
+    fn merchant_task_names_its_steps_honestly() {
+        let mut task = product_order_task("authorized");
+        task["proposal"]["product"]["source"] = json!("shopify");
+        let html = page("SANDBOX", task);
+        assert!(html.contains("Merchant fulfilment verification"));
+        assert!(
+            html.contains("Confirm the merchant&#x27;s price")
+                || html.contains("Confirm the merchant's price")
+        );
+        assert!(!html.contains("Independent delivery verification"));
+        assert!(!html.contains("Negotiate with resellers"));
+        // A carrier-verified reseller purchase keeps its own titles.
+        let html = page("SANDBOX", product_order_task("authorized"));
+        assert!(html.contains("Independent delivery verification"));
     }
 
     #[test]

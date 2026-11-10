@@ -35,6 +35,17 @@ Ask for a physical item, for example *"Buy me an LED desk lamp under $90 with tr
 
 Listings and prices are real; resellers, fulfilment and the carrier are simulated, and labelled so in the UI.
 
+### Buying from a real Shopify merchant
+
+When a Shopify development store is connected, the agent shops it **first**. It searches the store's live catalog, screens every listing as untrusted text, and proposes a fixed-price contract with that merchant at exactly the listed price.
+
+- **Order after authorization:** QuarantinePay creates the Shopify order only after PayPal has authorized the payment. The order is created as `AUTHORIZED`, as a test order, with the PayPal authorization ID on its transaction and a `qp-<order id>` tag. Creation is idempotent.
+- **Evidence from the merchant's own record:** a seller's "delivered" claim is refused (409). Capture happens only when QuarantinePay's own Admin API read of that order shows exactly the contracted variant, quantity 1, fulfilled with tracking to the buyer's address, and not cancelled. Tracking text is screened like any other untrusted input.
+- **Void cases:** if the merchant cancels, or does not fulfil within 15 minutes, the hold is voided.
+- **Merchant's books:** after PayPal settles, Shopify is updated to match. A capture is recorded against the order's authorization, and a void cancels the order.
+
+Verified live on 2026-11-10 against `convinienve-store.myshopify.com`: a fulfilled order was captured and shows PAID in Shopify, a merchant cancellation was voided, tracking text that tried to instruct the verifier was held and voided, and an unfulfilled order was voided and cancelled when its deadline expired ([docs/VALIDATION.md](docs/VALIDATION.md), [screenshot](docs/evidence/8-shopify-fulfilment-captured.png)). The fulfilment is the merchant's own record, not independent carrier proof.
+
 ### Autonomous mode: buy without clicking, never without limits
 
 You sign a **spending mandate** once: a per-purchase cap, a total budget, allowed sellers, minimum scope, an expiry of up to 7 days, and whether clean deliveries may auto-capture. One PayPal Sandbox approval saves (vaults) your PayPal wallet. QuarantinePay voids the USD 1.00 verification hold immediately.
@@ -199,6 +210,7 @@ CI ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)) runs these checks, i
 | Render deployment | Blueprint provided; not deployed. The Docker image is unbuilt because containers cannot run on the dev host; the Dockerfile steps were replicated natively and smoke-tested |
 | Live provider credential refusal on void | **Verified 2026-11-09**: a real PayPal `401 invalid_client` led to `provider_permission_required` and `reconciliation_required`, with the authorization preserved and no success claimed |
 | **Real product discovered via Channel3, bought autonomously, carrier-verified** | **Verified 2026-11-09.** A live Channel3 search returned 8 real listings. The agent bought the Bostitch LED Desk Lamp (Staples, listed USD 60.49) via a reseller for USD 63.98 with no click: capture `2D536347CT300140M` COMPLETED after a carrier-signed delivery. A forged delivery proof was rejected and the hold `7H5728982C810040U` VOIDED. The `product_flow` test covers screening, a forged proof, a wrong item, mandate auto-capture, an injected note and no opt-in |
+| **Bought from a real Shopify merchant; capture gated on its fulfilment record** | **Verified 2026-11-10** against a live Shopify development store. Injected listing withheld; the lamp bought at the store price (USD 34.00) with no click. Fulfilled #1002 and #1003 were captured (`4HE34820GV108705M`, `50202684975363011` COMPLETED) and show PAID in Shopify. A merchant cancellation, #1004, was voided (`0WW634460G511763A`). Injected tracking text on #1005 led to a policy hold and a 409 on approval; the buyer rejected it, so `4DA0671291327382M` was VOIDED and the order cancelled. Unfulfilled #1006 hit its deadline: `38205732K7846941U` VOIDED and the order cancelled. A seller's own delivery claim got a 409. The `merchant_flow` test covers these paths with a mock Admin API |
 | **Autonomous purchasing under a spending mandate** (vaulted wallet, no click) | **Verified 2026-11-09.** Mandate verification hold `2BH67756TV9096707` VOIDED. Clean purchase: capture `04H014221M4877141` COMPLETED (USD 47.25) with no human click. Injected purchase: escalated, rejected, `2G8288073K521383A` VOIDED. The `mandate_flow` test covers budget exhaustion, tampering and revocation |
 | Live PayPal **403** permission refusal on void | **Verified 2026-11-09**: with a second Sandbox merchant as payee, PayPal returned `403 NOT_AUTHORIZED / PERMISSION_DENIED`. The result was `provider_permission_required` and `reconciliation_required`, with the authorization `4VW92416K3021363U` preserved and still `CREATED` at PayPal |
 
@@ -211,7 +223,7 @@ Earlier testing saw a void refused with `403 PERMISSION_DENIED`. The app recorde
 - Checks establish structure and counts, not truth. A listed HTTPS source is not proof that the source supports a claim. The AI analyst's opinion is advisory.
 - Injection detection (phrase rules plus a model) cannot guarantee it catches every attack. It can only add caution.
 - Single administrator and single demo buyer. Not a production marketplace or payment service.
-- Channel3 catalog import is discovery-only and separate from settlement. The read-only Shopify connector is untested against a live store. No eBay or Square adapter exists ([research](docs/DEVELOPER_PROGRAMS.md)).
+- Channel3 catalog import is discovery-only and separate from settlement. The Shopify merchant path needs a **development store** (QuarantinePay refuses to write to any other store); its fulfilment evidence is the merchant's own record, not carrier proof. No eBay or Square adapter exists ([research](docs/DEVELOPER_PROGRAMS.md)).
 - The checked-in videos show earlier builds, not the agent flow.
 
 ## Built with
