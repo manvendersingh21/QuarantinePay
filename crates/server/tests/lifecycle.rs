@@ -89,6 +89,7 @@ async fn payment_security_and_recovery() {
                 .env("QP_ADMIN_PASSWORD", token)
                 .env("QP_VERIFIER_MODE", "trusted-process")
                 .env("ELASTIC_URL", "")
+                .env("SHOPIFY_DEV_STORE", "")
                 .stdout(Stdio::null())
                 .stderr(Stdio::null())
                 .spawn()

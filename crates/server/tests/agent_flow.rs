@@ -162,6 +162,7 @@ async fn agent_contract_purchase_is_policy_bound() {
             .env("QP_LOCAL_LLM_BASE", &model_base)
             .env("QP_LOCAL_MODEL", "mock-model")
             .env("ELASTIC_URL", "")
+            .env("SHOPIFY_DEV_STORE", "")
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .spawn()

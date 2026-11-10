@@ -174,6 +174,7 @@ async fn real_listing_purchases_need_carrier_proof() {
             .env("CHANNEL3_API_KEY", "test-key")
             .env("CHANNEL3_API_BASE", &catalog_base)
             .env("ELASTIC_URL", "")
+            .env("SHOPIFY_DEV_STORE", "")
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .spawn()

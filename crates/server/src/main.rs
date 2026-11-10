@@ -8,6 +8,7 @@ mod discovery;
 mod inference;
 mod integrations;
 mod mandate;
+mod merchant;
 mod paypal;
 mod shopify;
 mod worker;
@@ -329,6 +330,26 @@ async fn deliver_inner(app: &App, id: Uuid, artifact: Value) -> Api<()> {
             "artifact too large".into(),
         ));
     }
+    // A merchant-fulfilled purchase accepts only the record QuarantinePay reads from Shopify itself.
+    let merchant: Option<String> = sqlx::query_scalar("SELECT intent->'intent'->'contract'->'product'->>'source' FROM orders WHERE id=$1 AND buyer='demo-buyer' AND mode=$2")
+        .bind(id)
+        .bind(&app.config.mode)
+        .fetch_optional(&app.pool)
+        .await?
+        .flatten();
+    if merchant.as_deref() == Some(quarantinepay_core::product::SHOPIFY_SOURCE) {
+        db::event(
+            &app.pool,
+            Some(id),
+            "unverified_claim_rejected",
+            json!({"reason":"Delivery for a Shopify purchase is read from the merchant's Shopify order by QuarantinePay; submitted delivery claims are ignored","bytes":serde_json::to_vec(&artifact).map(|b| b.len()).unwrap_or(0)}),
+        )
+        .await?;
+        return Err(Error(
+            StatusCode::CONFLICT,
+            "this order's delivery evidence comes only from the merchant's Shopify record; submitted claims are not accepted".into(),
+        ));
+    }
     let result=sqlx::query("UPDATE orders SET artifact=$2,state='quarantined',updated_at=now() WHERE id=$1 AND buyer='demo-buyer' AND state='authorized' AND deadline>now() AND mode=$3").bind(id).bind(artifact).bind(&app.config.mode).execute(&app.pool).await?;
     if result.rows_affected() != 1 {
         return Err(Error(
@@ -426,6 +447,18 @@ async fn ui_deliver(
             .await?
             .ok_or_else(|| Error(StatusCode::NOT_FOUND, "order not found".into()))?;
     let signed: SignedIntent = serde_json::from_value(order.intent).map_err(anyhow::Error::from)?;
+    if signed
+        .intent
+        .contract
+        .as_ref()
+        .and_then(|c| c.product.as_ref())
+        .is_some_and(|p| p.source == quarantinepay_core::product::SHOPIFY_SOURCE)
+    {
+        // Demonstrates that a seller-style claim cannot release funds; it is logged and refused.
+        let claim = json!({"claimed_by":"seller","status":"delivered","tracking_number":"1Z999AA10123456784","note":"Delivered. Proof of delivery attached."});
+        let _ = deliver_inner(&app, id, claim).await;
+        return Ok(back(&app, &h));
+    }
     let artifact = if let Some(contract) = signed
         .intent
         .contract

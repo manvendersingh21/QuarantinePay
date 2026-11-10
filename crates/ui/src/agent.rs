@@ -29,6 +29,24 @@ fn is_product(task: &Value) -> bool {
     }
 }
 
+/// Sold and fulfilled directly by a real Shopify merchant (development store).
+fn is_merchant(task: &Value) -> bool {
+    str_of(&task["proposal"]["product"]["source"]) == "shopify"
+        || (task["proposal"].is_null()
+            && str_of(&task["discovery"]["source"]).starts_with("Shopify"))
+}
+fn merchant_order(order: &Value) -> bool {
+    str_of(&order["intent"]["intent"]["contract"]["product"]["source"]) == "shopify"
+}
+const MERCHANT_ROLE: &str = "real Shopify merchant (development store)";
+fn role(task: &Value) -> &'static str {
+    if is_merchant(task) {
+        MERCHANT_ROLE
+    } else {
+        seller_role(is_product(task))
+    }
+}
+
 /// The agent has fixed the exact real listing it will negotiate for.
 fn listing_chosen(task: &Value) -> bool {
     !str_of(&task["discovery"]["selected"]).is_empty() || task["proposal"]["product"].is_object()
@@ -183,7 +201,9 @@ fn verification_stage(order: &Value, product: bool) -> Stage {
     } else if order["verification"]["passed"].as_bool() == Some(true) {
         stage(
             St::Done,
-            if product {
+            if merchant_order(order) {
+                "Fulfilment verified"
+            } else if product {
                 "Carrier-verified"
             } else {
                 "Passed"
@@ -482,9 +502,16 @@ fn understand(task: &Value) -> String {
             ),
             ("Budget ceiling", money_or_dash(&o["budget_minor"])),
             ("Topic", or_dash(&o["topic"])),
-            ("Delivery proof", "Carrier-signed attestation".into()),
+            (
+                "Delivery proof",
+                if is_merchant(task) {
+                    "The merchant's Shopify fulfilment record, read by QuarantinePay".into()
+                } else {
+                    "Carrier-signed attestation".into()
+                },
+            ),
         ]));
-        h.push_str(r#"<p class="muted small">Only the product search terms may leave QuarantinePay, and only if you opted in to the Channel3 search. Your budget is never disclosed to resellers or to the search.</p>"#);
+        h.push_str(r#"<p class="muted small">Only the product search terms may leave QuarantinePay — to the integrated Shopify merchant and, if it has nothing eligible, to Channel3 — and only if you opted in. Your budget is never disclosed to sellers or to the search.</p>"#);
     } else if o.is_object() {
         h.push_str(&kv(&[
             ("Topic", or_dash(&o["topic"])),
@@ -545,7 +572,7 @@ fn seller_role(product: bool) -> &'static str {
     }
 }
 
-fn seller_roster(offers: &[Value], product: bool) -> String {
+fn seller_roster(offers: &[Value], role: &str) -> String {
     let mut h = String::from(r#"<ul class="sellers">"#);
     for o in offers {
         h.push_str(&format!(
@@ -553,7 +580,7 @@ fn seller_roster(offers: &[Value], product: bool) -> String {
             esc(&text(&o["seller"]).chars().next().unwrap_or('·').to_string()),
             esc(&text(&o["seller"])),
             money_or_dash(&o["list_minor"]),
-            seller_role(product),
+            role,
             offer_status_chip(str_of(&o["status"])),
         ));
     }
@@ -572,7 +599,7 @@ fn discover(task: &Value) -> String {
                 r#"<p class="muted small">Requests for quote sent to {} fictional seller agents. Each seller answers within its own scope and price floor.</p>"#,
                 offers.len()
             );
-            h.push_str(&seller_roster(offers, false));
+            h.push_str(&seller_roster(offers, seller_role(false)));
             h
         }
         _ if matches!(str_of(&task["state"]), "planning" | "negotiating") => {
@@ -591,7 +618,7 @@ fn screening_chip(screening: &str) -> String {
     }
 }
 
-fn listing_item(r: &Value, selected: &str) -> String {
+fn listing_item(r: &Value, selected: &str, via: &str) -> String {
     let id = str_of(&r["product_id"]);
     let is_selected = !selected.is_empty() && id == selected;
     let withheld = str_of(&r["screening"]) == "withheld";
@@ -628,10 +655,11 @@ fn listing_item(r: &Value, selected: &str) -> String {
     format!(
         concat!(
             r#"<li class="{cls}"{current}><div class="listing-main"><div class="listing-title">{title}</div>"#,
-            r#"<span class="muted small">{source}</span><div class="chips"><span class="tag">Real listing via Channel3</span>{screening}{eligible}{sel}</div>"#,
+            r#"<span class="muted small">{source}</span><div class="chips"><span class="tag">{via}</span>{screening}{eligible}{sel}</div>"#,
             r#"{reason}</div><div class="listing-price num">{price}</div></li>"#
         ),
         cls = cls,
+        via = esc(via),
         current = if is_selected {
             r#" aria-current="true""#
         } else {
@@ -687,6 +715,12 @@ fn discover_products(task: &Value) -> String {
     }
     let external = d["external"].as_bool() == Some(true);
     let source = text(&d["source"]);
+    let merchant = source.starts_with("Shopify");
+    let target = if merchant {
+        format!("the Shopify merchant ({})", text(&d["shop"]))
+    } else {
+        "Channel3".into()
+    };
     let query = text(&d["query"]);
     let mut h = format!(
         r#"<div class="chips">{}{}</div>"#,
@@ -711,8 +745,23 @@ fn discover_products(task: &Value) -> String {
     };
     if external {
         h.push_str(&format!(
-            r#"<p class="sent-query"><span>Sent to Channel3:</span> {query_html}</p><p class="muted small">Only these search terms left QuarantinePay — not your budget, address or request text.</p>"#
+            r#"<p class="sent-query"><span>Sent to {}:</span> {query_html}</p><p class="muted small">Only these search terms left QuarantinePay — not your budget, address or request text.</p>"#,
+            esc(&target)
         ));
+        let fallback = &d["merchant_search"];
+        if fallback.is_object() {
+            h.push_str(&format!(
+                r#"<p class="muted small">Searched the integrated Shopify merchant first: {}</p>"#,
+                esc(&truncate(
+                    &text(if fallback["error"].is_string() {
+                        &fallback["error"]
+                    } else {
+                        &fallback["note"]
+                    }),
+                    240
+                ))
+            ));
+        }
     } else {
         h.push_str(&format!(
             r#"<p class="sent-query"><span>Searched the local Channel3 mirror for:</span> {query_html}</p><p class="muted small">Nothing was sent to Channel3 for this search.</p>"#
@@ -739,7 +788,15 @@ fn discover_products(task: &Value) -> String {
         ));
         let selected = str_of(&d["selected"]);
         for r in results {
-            h.push_str(&listing_item(r, selected));
+            h.push_str(&listing_item(
+                r,
+                selected,
+                if merchant {
+                    "Live Shopify catalog"
+                } else {
+                    "Real listing via Channel3"
+                },
+            ));
         }
         h.push_str("</ul>");
     }
@@ -751,19 +808,27 @@ fn discover_products(task: &Value) -> String {
         ));
     }
     match task["negotiation"]["offers"].as_array() {
+        Some(offers) if !offers.is_empty() && merchant => {
+            h.push_str(r#"<p class="muted small">The merchant sells at its own store price; the agent confirmed it against the live catalog and the budget.</p>"#);
+            h.push_str(&seller_roster(offers, MERCHANT_ROLE));
+        }
         Some(offers) if !offers.is_empty() => {
             h.push_str(&format!(
                 r#"<p class="muted small">Quotes requested from {} fictional reseller agents for the selected listing, delivered to the buyer.</p>"#,
                 offers.len()
             ));
-            h.push_str(&seller_roster(offers, true));
+            h.push_str(&seller_roster(offers, seller_role(true)));
         }
         _ if in_progress && listing_chosen(task) => h.push_str(
             r#"<p class="muted working">Asking fictional reseller agents to quote this listing…</p>"#,
         ),
         _ => {}
     }
-    h.push_str(r#"<p class="honest small">Listings and prices are real (Channel3). Reseller agents, fulfilment and the carrier are simulated.</p>"#);
+    h.push_str(if merchant {
+        r#"<p class="honest small">Merchant, listing and price are real (a Shopify development store). The merchant fulfils the order in Shopify; PayPal Sandbox holds the funds until that fulfilment is verified.</p>"#
+    } else {
+        r#"<p class="honest small">Listings and prices are real (Channel3). Reseller agents, fulfilment and the carrier are simulated.</p>"#
+    });
     h
 }
 
@@ -776,7 +841,6 @@ fn negotiate(task: &Value) -> String {
             String::new()
         };
     }
-    let product = is_product(task);
     let mut h = String::new();
     if let Some(msgs) = n["transcript"].as_array().filter(|m| !m.is_empty()) {
         h.push_str(&format!(
@@ -794,7 +858,7 @@ fn negotiate(task: &Value) -> String {
                 h.push_str(&format!(
                     r#"<li class="chat-divider"><span>{} · {}</span></li>"#,
                     esc(seller_name(task, other)),
-                    seller_role(product)
+                    role(task)
                 ));
             }
             let kind = str_of(&m["kind"]);
@@ -832,7 +896,7 @@ fn negotiate(task: &Value) -> String {
                 cls = if is_selected { r#" class="selected""# } else { "" },
                 seller = esc(&text(&o["seller"])),
                 sel = if is_selected { r#" <span class="tag tag-mint">Selected</span>"# } else { "" },
-                role = seller_role(product),
+                role = role(task),
                 list = money_or_dash(&o["list_minor"]),
                 agreed = money_or_dash(&o["agreed_minor"]),
                 status = offer_status_chip(str_of(&o["status"])),
@@ -853,9 +917,11 @@ fn negotiate(task: &Value) -> String {
 
 fn product_card(c: &Value) -> String {
     let p = &c["product"];
+    let merchant = str_of(&p["source"]) == "shopify";
     let listed = minor(&p["listed_price_minor"]);
     let agreed = minor(&c["amount_minor"]);
     let markup = match (listed, agreed) {
+        (Some(l), Some(a)) if merchant && a == l => "Store price · no markup".to_string(),
         (Some(l), Some(a)) if a >= l => format!("+{} reseller margin &amp; shipping", usd(a - l)),
         (Some(l), Some(a)) => format!("{} below the listed price", usd(l - a)),
         _ => "Reseller's delivered price".into(),
@@ -865,7 +931,7 @@ fn product_card(c: &Value) -> String {
     let mut h = format!(
         concat!(
             r#"<div class="product-card"><span class="eyebrow">THE EXACT LISTING IN THIS CONTRACT</span>"#,
-            r#"<h5 class="listing-title">{title}</h5><p class="muted small">{retailer}{brand} · real listing via Channel3</p>"#,
+            r#"<h5 class="listing-title">{title}</h5><p class="muted small">{retailer}{brand} · {via}</p>"#,
             r#"<div class="price-compare"><div><span>Listed price</span><strong>{listed}</strong><small>at {retailer}</small></div>"#,
             r#"<div class="agreed"><span>Agreed delivered price</span><strong>{agreed}</strong><small>{markup}</small></div></div>"#
         ),
@@ -886,10 +952,18 @@ fn product_card(c: &Value) -> String {
         listed = money_or_dash(&p["listed_price_minor"]),
         agreed = money_or_dash(&c["amount_minor"]),
         markup = markup,
+        via = if merchant {
+            "sold directly by the Shopify merchant"
+        } else {
+            "real listing via Channel3"
+        },
     );
     h.push_str(&kv(&[
         ("Ship to", or_dash(&p["ship_to"])),
-        ("Carrier", or_dash(&p["carrier"])),
+        (
+            if merchant { "Fulfilment" } else { "Carrier" },
+            or_dash(&p["carrier"]),
+        ),
         ("Delivery window", seconds_label(&c["deadline_seconds"])),
         (
             "Listing",
@@ -904,9 +978,13 @@ fn product_card(c: &Value) -> String {
         ),
         ("Quantity", "1".into()),
     ]));
-    h.push_str(&format!(
-        r#"<p class="honest small">{PRODUCT_HONESTY} Capture requires a delivery attestation signed by the carrier, not the reseller.</p></div>"#
-    ));
+    h.push_str(&if merchant {
+        r#"<p class="honest small">Real merchant, real listing. Capture requires the merchant's own Shopify order to show this exact item fulfilled with tracking to this address — read by QuarantinePay from Shopify, never submitted by the seller.</p></div>"#.to_string()
+    } else {
+        format!(
+            r#"<p class="honest small">{PRODUCT_HONESTY} Capture requires a delivery attestation signed by the carrier, not the reseller.</p></div>"#
+        )
+    });
     h
 }
 
@@ -917,10 +995,11 @@ fn contract(task: &Value) -> String {
     }
     if str_of(&c["kind"]) == PRODUCT_KIND {
         let mut h = format!(
-            r#"<div class="contract-card"><div class="contract-head"><div><span class="eyebrow">CANONICAL PURCHASE CONTRACT · v{}</span><h4>{}</h4><p class="muted small">{} · fictional reseller agent</p></div><div class="contract-price">{}</div></div>"#,
+            r#"<div class="contract-card"><div class="contract-head"><div><span class="eyebrow">CANONICAL PURCHASE CONTRACT · v{}</span><h4>{}</h4><p class="muted small">{} · {}</p></div><div class="contract-price">{}</div></div>"#,
             or_dash(&c["version"]),
             esc(&text(&c["item"])),
             esc(&text(&c["seller"])),
+            role(task),
             money_or_dash(&c["amount_minor"]),
         );
         h.push_str(&product_card(c));
@@ -1084,10 +1163,16 @@ fn manual_approval(task: &Value, replay: bool) -> String {
     match str_of(&task["state"]) {
         "awaiting_approval" => {
             let mut h = format!(
-                r#"<p>Approving signs an Ed25519 intent bound to this contract digest. The gateway will only authorize exactly <strong>{}</strong> for <strong>{}</strong>'s contract, payable to the allowlisted PayPal Sandbox merchant (the {} is fictional). Authorization is a hold, not a payment; any change to the contract changes its digest and is refused.</p>"#,
+                r#"<p>Approving signs an Ed25519 intent bound to this contract digest. The gateway will only authorize exactly <strong>{}</strong> for <strong>{}</strong>'s contract, payable to the allowlisted PayPal Sandbox merchant ({}). Authorization is a hold, not a payment; any change to the contract changes its digest and is refused.</p>"#,
                 amount.map(usd).unwrap_or_else(|| "the agreed amount".into()),
                 if seller.is_empty() { "the selected seller".to_string() } else { esc(&seller) },
-                if is_product(task) { "reseller" } else { "seller" },
+                if is_merchant(task) {
+                    "the Shopify order is placed only after PayPal authorizes"
+                } else if is_product(task) {
+                    "the reseller is fictional"
+                } else {
+                    "the seller is fictional"
+                },
             );
             h.push_str(r#"<div class="decision">"#);
             if digest.is_empty() {
@@ -1278,7 +1363,101 @@ fn report_content(artifact: &Value) -> String {
     }
 }
 
+/// Shopify admin link for a merchant order (numeric ID from the GraphQL GID). Text only otherwise.
+fn shopify_admin_link(task: &Value, order: &Value) -> String {
+    let name = text(&order["shopify_name"]);
+    let gid = text(&order["shopify_order"]);
+    let shop = text(&task["proposal"]["product"]["retailer"]);
+    let label = shop.strip_suffix(".myshopify.com").unwrap_or("");
+    let num = gid.strip_prefix("gid://shopify/Order/").unwrap_or("");
+    let shown = if name.is_empty() { gid.clone() } else { name };
+    if !label.is_empty()
+        && label
+            .bytes()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
+        && !num.is_empty()
+        && num.bytes().all(|b| b.is_ascii_digit())
+    {
+        format!(
+            r#"<a href="https://admin.shopify.com/store/{label}/orders/{num}" target="_blank" rel="noopener noreferrer">{} in Shopify admin</a>"#,
+            esc(&shown)
+        )
+    } else {
+        esc(&shown)
+    }
+}
+
+fn merchant_delivery(task: &Value) -> String {
+    let order = &task["order"];
+    let mut h = String::new();
+    let state = str_of(&order["state"]);
+    let placed = !text(&order["shopify_order"]).is_empty();
+    if state == "authorized" {
+        let id = seg(str_of(&order["id"]));
+        let deadline = text(&order["deadline"]);
+        h.push_str(r#"<div class="simulator"><div class="sim-head"><strong>Merchant fulfilment</strong><span class="badge">REAL SHOPIFY ORDER</span></div>"#);
+        if placed {
+            h.push_str(&format!(
+                r#"<p>Order {} is open at the merchant with the PayPal authorization recorded on it. QuarantinePay reads the order from Shopify every few seconds; the hold is captured only once the merchant fulfils this exact item with tracking to the buyer's address.</p>"#,
+                shopify_admin_link(task, order)
+            ));
+        } else {
+            h.push_str(
+                r#"<p class="muted working">Placing the order with the merchant in Shopify…</p>"#,
+            );
+        }
+        let error = text(&order["shopify_error"]);
+        if !error.is_empty() {
+            h.push_str(&format!(
+                r#"<p class="notice warn">Shopify: {}. No payment effect; the hold is voided if the merchant does not fulfil in time.</p>"#,
+                esc(&truncate(&error, 300))
+            ));
+        }
+        if !deadline.is_empty() {
+            h.push_str(&format!(
+                r#"<p class="countdown">Fulfilment window: <time data-deadline="{d}">{d}</time></p>"#,
+                d = esc(&deadline)
+            ));
+        }
+        h.push_str(&format!(
+            r#"<div class="actions"><form method="post" action="/ui/orders/{id}/deliveries"><input type="hidden" name="fixture" value="forged"/><button class="danger">Seller claims "delivered" (will be refused)</button></form></div><p class="muted small">A seller's own claim is never evidence for a merchant order; trying it is logged and changes nothing.</p></div>"#
+        ));
+    } else if placed {
+        h.push_str(&format!(
+            r#"<p class="muted small">Merchant order: {}</p>"#,
+            shopify_admin_link(task, order)
+        ));
+    }
+    let artifact = &order["artifact"];
+    if !artifact.is_null() {
+        let raw = serde_json::to_string_pretty(artifact).unwrap_or_default();
+        h.push_str(&format!(
+            r#"<details class="report"><summary>Merchant's Shopify order record · fetched by QuarantinePay · {} characters</summary><pre class="evidence">{}</pre></details>"#,
+            raw.chars().count(),
+            esc(&raw)
+        ));
+    }
+    let settled = &order["shopify_settlement"];
+    if settled.is_object() {
+        h.push_str(&format!(
+            r#"<p class="muted small">Merchant's books: {}</p>"#,
+            esc(&match str_of(&settled["action"]) {
+                "marked_paid" => "Shopify order marked paid after PayPal captured.".to_string(),
+                "cancelled" => "Shopify order cancelled after PayPal voided the hold.".to_string(),
+                _ => format!(
+                    "could not update the Shopify order ({})",
+                    truncate(&text(&settled["error"]), 200)
+                ),
+            })
+        ));
+    }
+    h
+}
+
 fn product_delivery(task: &Value) -> String {
+    if is_merchant(task) {
+        return merchant_delivery(task);
+    }
     let order = &task["order"];
     let mut h = String::new();
     if str_of(&order["state"]) == "authorized" {
@@ -1473,7 +1652,7 @@ fn analyst_card(order: &Value, product: bool) -> String {
         h.push_str("</ul></div>");
     }
     h.push_str(if deterministic {
-        r#"<p class="authority"><strong>The analyst has no payment authority.</strong> These fixed rules can only add caution; capture requires the carrier-verified checks to pass and either your mandate's auto-capture policy or your decision.</p></div>"#
+        r#"<p class="authority"><strong>The analyst has no payment authority.</strong> These fixed rules can only add caution; capture requires the delivery checks to pass and either your mandate's auto-capture policy or your decision.</p></div>"#
     } else {
         r#"<p class="authority"><strong>Model output has no payment authority.</strong> The analyst can only add caution; capture requires passing contract checks and your decision.</p></div>"#
     });
@@ -1486,10 +1665,13 @@ fn delivery_check_label(name: &str) -> String {
         "carrier_signature" => "Signed by the carrier, not the seller".into(),
         "tracking_matches" => "Seller's tracking number matches carrier".into(),
         "order_binding" => "Bound to this order and signed contract".into(),
-        "item_matches" => "Contracted item delivered".into(),
-        "destination_matches" => "Delivered to the buyer's address".into(),
+        "item_matches" => "Exactly the contracted item, quantity 1".into(),
+        "destination_matches" => "Buyer's address".into(),
         "delivered" => "Carrier status: delivered".into(),
         "carrier_attestation" => "Carrier attestation present".into(),
+        "merchant_record" => "Read from the merchant's Shopify order by QuarantinePay".into(),
+        "not_cancelled" => "Not cancelled by the merchant".into(),
+        "fulfilled_with_tracking" => "Fulfilled by the merchant, with tracking".into(),
         other => humanize(other),
     }
 }
@@ -1557,8 +1739,13 @@ fn untrusted_findings(v: &Value) -> String {
 fn product_verification(task: &Value) -> String {
     let order = &task["order"];
     let mut h = String::new();
+    let merchant = merchant_order(order);
     if str_of(&order["state"]) == "quarantined" {
-        h.push_str(r#"<p class="working analysing"><span class="spinner" aria-hidden="true"></span>Verifying the carrier attestation… Funds stay on hold until delivery is independently proven.</p>"#);
+        h.push_str(if merchant {
+            r#"<p class="working analysing"><span class="spinner" aria-hidden="true"></span>Checking the merchant's Shopify order against the contract… Funds stay on hold.</p>"#
+        } else {
+            r#"<p class="working analysing"><span class="spinner" aria-hidden="true"></span>Verifying the carrier attestation… Funds stay on hold until delivery is independently proven.</p>"#
+        });
     }
     let v = &order["verification"];
     let artifact = &order["artifact"];
@@ -1571,10 +1758,11 @@ fn product_verification(task: &Value) -> String {
         let ok = v["passed"].as_bool() == Some(true);
         h.push_str(&format!(
             r#"<div class="verdict-head">{}<strong>{passed} / {} delivery checks passed</strong></div>"#,
-            if ok {
-                chip("good", "Delivery independently verified")
-            } else {
-                chip("bad", "Delivery not independently verified")
+            match (ok, merchant) {
+                (true, true) => chip("good", "Merchant fulfilment verified"),
+                (false, true) => chip("bad", "Merchant fulfilment not verified"),
+                (true, false) => chip("good", "Delivery independently verified"),
+                (false, false) => chip("bad", "Delivery not independently verified"),
             },
             checks.len(),
         ));
@@ -1722,7 +1910,9 @@ fn settlement(task: &Value, events: &[Value]) -> String {
                     ),
                     a = action,
                     amt = esc(&amount),
-                    what = if product {
+                    what = if merchant_order(order) {
+                        "merchant's fulfilment record"
+                    } else if product {
                         "carrier attestation"
                     } else {
                         "delivered report"
@@ -1733,13 +1923,25 @@ fn settlement(task: &Value, events: &[Value]) -> String {
         "captured" if auto => h.push_str(&format!(
             r#"<div class="outcome good"><strong>Captured {} automatically</strong><p>Captured automatically: all checks passed, no hold, analyst low-risk.{}</p></div>"#,
             esc(&amount),
-            if product { " The carrier, not the reseller, attested delivery." } else { "" },
+            if merchant_order(order) {
+                " The merchant's own Shopify order, read by QuarantinePay, showed the item fulfilled with tracking."
+            } else if product {
+                " The carrier, not the reseller, attested delivery."
+            } else {
+                ""
+            },
         )),
         "capture_pending" if auto => h.push_str(r#"<p class="working">Capturing automatically: all checks passed, no hold, analyst low-risk. Waiting for the provider to confirm.</p>"#),
         "captured" => h.push_str(&format!(
-            r#"<div class="outcome good"><strong>Captured {}</strong><p>Funds were paid to the fictional {} after the delivery was verified and approved.</p></div>"#,
+            r#"<div class="outcome good"><strong>Captured {}</strong><p>Funds were paid {} after the delivery was verified and approved.</p></div>"#,
             esc(&amount),
-            if product { "reseller" } else { "seller" },
+            if merchant_order(order) {
+                "to the PayPal Sandbox merchant for the Shopify order"
+            } else if product {
+                "to the fictional reseller"
+            } else {
+                "to the fictional seller"
+            },
         )),
         "voided" => h.push_str(r#"<div class="outcome bad"><strong>Authorization voided</strong><p>The hold was released. The buyer was not charged.</p></div>"#),
         "reconciliation_required" => h.push_str(r#"<div class="outcome warn"><strong>Reconciliation required</strong><p>Provider outcome uncertain or permission refused — reconciliation required; no success is claimed.</p></div>"#),
@@ -1976,7 +2178,13 @@ fn event_label(kind: &str) -> String {
         "agent_autonomous_purchase" => "Autonomous purchase · intent signed under mandate",
         "auto_capture_policy_satisfied" => "Auto-capture policy satisfied",
         "escalated_to_buyer" => "Escalated to buyer",
-        "agent_discovery_search" => "Searched real products (Channel3)",
+        "agent_discovery_search" => "Searched real products",
+        "merchant_order_placed" => "Order placed with the Shopify merchant",
+        "merchant_fulfilment_observed" => "Merchant fulfilment read from Shopify",
+        "merchant_cancelled" => "Merchant cancelled the Shopify order",
+        "merchant_order_updated" => "Merchant's Shopify order updated",
+        "merchant_error" => "Shopify merchant error",
+        "unverified_claim_rejected" => "Seller's delivery claim refused",
         "agent_listing_selected" => "Real listing selected",
         "carrier_attestation_verified" => "Carrier attestation verified",
         "delivery_not_verified" => "Delivery not independently verified",
@@ -1998,7 +2206,11 @@ fn event_tone(kind: &str) -> &'static str {
         | "mandate_activated"
         | "mandate_verification_voided"
         | "auto_capture_policy_satisfied"
-        | "carrier_attestation_verified" => return "good",
+        | "carrier_attestation_verified"
+        | "merchant_fulfilment_observed" => return "good",
+        "merchant_order_placed" | "merchant_order_updated" => return "info",
+        "unverified_claim_rejected" | "merchant_cancelled" => return "bad",
+        "merchant_error" => return "warn",
         "mandate_policy_check"
         | "agent_autonomous_purchase"
         | "agent_discovery_search"
@@ -2098,7 +2310,7 @@ fn request_box(active_mandate: Option<&Value>) -> String {
 }
 
 fn empty_detail() -> String {
-    r#"<section class="panel empty-state"><span class="eyebrow">NO TASK SELECTED</span><h2>Bounded authority, end to end</h2><ol class="how"><li><strong>You describe</strong> what you need and your budget.</li><li><strong>The agent negotiates</strong> with three fictional sellers — or, for a physical product, finds a real listing via Channel3 and negotiates with three fictional reseller agents — and compiles a canonical contract.</li><li><strong>You approve</strong> the exact contract digest; PayPal places an authorization hold.</li><li><strong>The delivery is verified</strong> before anything is captured: reports by contract checks and an advisory AI analyst, products by a carrier-signed delivery attestation the reseller cannot forge.</li></ol><p class="muted small">Or sign a <strong>spending mandate</strong>: approve once at PayPal Sandbox to save your wallet, and the agent buys within your limits without further clicks. Only clean, low-risk deliveries are captured automatically; anything else is escalated to you.</p></section>"#.into()
+    r#"<section class="panel empty-state"><span class="eyebrow">NO TASK SELECTED</span><h2>Bounded authority, end to end</h2><ol class="how"><li><strong>You describe</strong> what you need and your budget.</li><li><strong>The agent negotiates</strong> with three fictional sellers — or, for a physical product, buys from a real Shopify merchant at its store price (or, failing that, finds a real listing via Channel3 and negotiates with three fictional reseller agents) — and compiles a canonical contract.</li><li><strong>You approve</strong> the exact contract digest; PayPal places an authorization hold.</li><li><strong>The delivery is verified</strong> before anything is captured: reports by contract checks and an advisory AI analyst, products by the merchant's own Shopify fulfilment record (read by QuarantinePay) or a carrier-signed attestation the reseller cannot forge.</li></ol><p class="muted small">Or sign a <strong>spending mandate</strong>: approve once at PayPal Sandbox to save your wallet, and the agent buys within your limits without further clicks. Only clean, low-risk deliveries are captured automatically; anything else is escalated to you.</p></section>"#.into()
 }
 
 #[allow(clippy::too_many_arguments)] // Flat signature shared with the server handler.
@@ -2685,7 +2897,7 @@ mod tests {
         assert!(html.contains("fictional reseller agent"));
         assert!(html.contains("Prices are as listed by the retailer at search time."));
         for label in [
-            "Searched real products (Channel3)",
+            "Searched real products",
             "Real listing selected",
             "Carrier attestation verified",
             "Delivery not independently verified",
@@ -2821,8 +3033,8 @@ mod tests {
         ));
         for label in [
             "Bound to this order and signed contract",
-            "Contracted item delivered",
-            "Delivered to the buyer&#39;s address",
+            "Exactly the contracted item, quantity 1",
+            "Buyer&#39;s address",
             "Carrier status: delivered",
             "Seller&#39;s tracking number matches carrier",
         ] {

@@ -26,6 +26,10 @@ pub struct Order {
     pub risk_override: bool,
     pub created_at: chrono::DateTime<chrono::Utc>,
     pub mandate_id: Option<Uuid>,
+    pub shopify_order: Option<String>,
+    pub shopify_name: Option<String>,
+    pub shopify_error: Option<String>,
+    pub shopify_settlement: Option<Value>,
 }
 pub async fn event(pool: &PgPool, id: Option<Uuid>, kind: &str, detail: Value) -> Result<()> {
     sqlx::query("INSERT INTO events(order_id,buyer,kind,detail) VALUES($1,'demo-buyer',$2,$3)")

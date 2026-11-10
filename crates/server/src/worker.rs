@@ -63,23 +63,48 @@ fn verify_any(
     order: uuid::Uuid,
     artifact: &Value,
 ) -> Result<quarantinepay_core::contract::ContractVerdict> {
-    Ok(if contract.product.is_some() {
-        quarantinepay_core::product::verify_product_delivery(
-            contract,
-            &order.to_string(),
-            artifact,
-            &crate::carrier::key()?.verifying_key(),
-        )
-    } else {
-        quarantinepay_core::contract::verify_contract_delivery(contract, artifact)
-    })
+    Ok(
+        if contract
+            .product
+            .as_ref()
+            .is_some_and(|p| p.source == quarantinepay_core::product::SHOPIFY_SOURCE)
+        {
+            quarantinepay_core::product::verify_shopify_fulfilment(
+                contract,
+                &order.to_string(),
+                artifact,
+            )
+        } else if contract.product.is_some() {
+            quarantinepay_core::product::verify_product_delivery(
+                contract,
+                &order.to_string(),
+                artifact,
+                &crate::carrier::key()?.verifying_key(),
+            )
+        } else {
+            quarantinepay_core::contract::verify_contract_delivery(contract, artifact)
+        },
+    )
 }
 /// Deterministic analysis for product deliveries: the carrier attestation is the evidence, and
 /// any instruction-like seller text forces a hold. No model is consulted.
-fn product_analysis(v: &quarantinepay_core::contract::ContractVerdict) -> Value {
+fn product_analysis(v: &quarantinepay_core::contract::ContractVerdict, merchant: bool) -> Value {
     let injected = !v.untrusted_instructions.is_empty();
+    let (note, clean, held) = if merchant {
+        (
+            "Fulfilment read by QuarantinePay from the merchant's Shopify order; tracking text screened deterministically",
+            "The merchant's Shopify order shows the contracted item fulfilled with tracking to the buyer's address.",
+            "The merchant recorded a fulfilment, but its tracking details try to instruct the verifier; held for the buyer.",
+        )
+    } else {
+        (
+            "Delivery proven by a carrier-signed attestation; seller text screened deterministically",
+            "The carrier attests delivery of the contracted item to the buyer's address.",
+            "The carrier confirmed delivery, but the seller's note tries to instruct the verifier; held for the buyer.",
+        )
+    };
     json!({
-        "analyst": {"source":"rules","note":"Delivery proven by a carrier-signed attestation; seller text screened deterministically"},
+        "analyst": {"source":"rules","note":note},
         "risk": if injected { "high" } else { "low" },
         "injection_detected": injected,
         "policy_hold": injected,
@@ -87,7 +112,7 @@ fn product_analysis(v: &quarantinepay_core::contract::ContractVerdict) -> Value 
         "relevance": "on_topic",
         "quality_concerns": [],
         "recommended_action": if injected { "reject" } else { "approve" },
-        "summary": if injected { "The carrier confirmed delivery, but the seller's note tries to instruct the verifier; held for the buyer." } else { "The carrier attests delivery of the contracted item to the buyer's address." },
+        "summary": if injected { held } else { clean },
         "payment_authority": false,
         "evidence_sha256": v.evidence_sha256,
         "analyzed_at": chrono::Utc::now(),
@@ -143,7 +168,11 @@ async fn pre_analysis(app: &App, id: uuid::Uuid) -> Result<Option<Value>> {
         return Ok(None);
     }
     if contract.product.is_some() {
-        return Ok(Some(product_analysis(&verdict)));
+        let merchant = contract
+            .product
+            .as_ref()
+            .is_some_and(|p| p.source == quarantinepay_core::product::SHOPIFY_SOURCE);
+        return Ok(Some(product_analysis(&verdict, merchant)));
     }
     db::event(
         &app.pool,
@@ -592,6 +621,9 @@ pub async fn run(app: App) {
     let mut interval = tokio::time::interval(std::time::Duration::from_secs(2));
     loop {
         interval.tick().await;
+        if let Err(e) = crate::merchant::sync(&app).await {
+            tracing::warn!(error=%e, "merchant sync failed; payments are unaffected");
+        }
         let ids=sqlx::query_scalar::<_,uuid::Uuid>("SELECT id FROM orders WHERE mode=$1 AND state IN ('create_pending','authorize_pending','authorized','quarantined','buyer_review','capture_pending','void_pending') ORDER BY updated_at LIMIT 100").bind(&app.config.mode).fetch_all(&app.pool).await;
         match ids {
             Ok(ids) => {

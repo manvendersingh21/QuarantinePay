@@ -47,6 +47,9 @@ pub async fn create(app: &App, terms: MandateTerms) -> Result<Value> {
                     .iter()
                     .map(|r| r.id.to_string()),
             )
+            .chain(std::iter::once(
+                quarantinepay_core::product::SHOPIFY_SELLER_ID.to_string(),
+            ))
             .collect(),
         min_competitors: 3,
         min_sources: 5,

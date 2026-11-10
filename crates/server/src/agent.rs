@@ -7,7 +7,9 @@ use quarantinepay_core::contract::{
     Negotiation, Objective, SignedMandate, SpendingMandate, compile_contract_under, negotiate,
     sellers,
 };
-use quarantinepay_core::product::{ProductTerms, compile_product_contract, negotiate_product};
+use quarantinepay_core::product::{
+    ProductTerms, compile_product_contract, negotiate_direct, negotiate_product,
+};
 use serde_json::{Value, json};
 use uuid::Uuid;
 
@@ -158,10 +160,13 @@ async fn run(app: &App, id: Uuid, request: &str, mandate_id: Option<Uuid>) -> Re
             &app.pool,
             id,
             "agent_listing_selected",
-            json!({"task_id":id,"title":product.title,"retailer":product.retailer,"listed_price_minor":product.listed_price_minor,"source":"Channel3"}),
+            json!({"task_id":id,"title":product.title,"retailer":product.retailer,"listed_price_minor":product.listed_price_minor,"source":if found.merchant.is_some() {"Shopify merchant"} else {"Channel3"}}),
         )
         .await?;
-        let negotiation = negotiate_product(&objective, &product);
+        let negotiation = match &found.merchant {
+            Some(merchant) => negotiate_direct(&objective, &product, merchant),
+            None => negotiate_product(&objective, &product),
+        };
         (Purchase::Product(Box::new(product)), negotiation)
     } else {
         db::task_event(

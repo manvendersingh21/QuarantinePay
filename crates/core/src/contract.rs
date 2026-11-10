@@ -694,10 +694,11 @@ impl SpendingMandate {
         );
         ensure!(
             !self.allowed_sellers.is_empty()
-                && self
-                    .allowed_sellers
-                    .iter()
-                    .all(|s| seller(s).is_some() || crate::product::reseller(s).is_some()),
+                && self.allowed_sellers.iter().all(|s| {
+                    seller(s).is_some()
+                        || crate::product::reseller(s).is_some()
+                        || s == crate::product::SHOPIFY_SELLER_ID
+                }),
             "mandate sellers must be on the allowlist"
         );
         ensure!(
