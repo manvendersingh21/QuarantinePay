@@ -1,0 +1,113 @@
+WEBVTT
+
+1
+00:00:03.800 --> 00:00:06.691
+This time the seller is a real Shopify store.
+
+2
+00:00:06.691 --> 00:00:11.703
+I ask my agent for an LED desk lamp under sixty dollars with tracked delivery.
+
+3
+00:00:11.703 --> 00:00:14.144
+My spending mandate is already active.
+
+4
+00:00:15.714 --> 00:00:18.483
+The agent searches the store's live catalog.
+
+5
+00:00:18.483 --> 00:00:23.392
+The cheapest lamp's description tries to instruct the agent, so it's withheld.
+
+6
+00:00:23.392 --> 00:00:27.042
+The agent picks the Lumen Arc lamp at thirty-four dollars.
+
+7
+00:00:28.158 --> 00:00:30.812
+The merchant sells at its own store price.
+
+8
+00:00:30.812 --> 00:00:38.142
+The contract binds the exact Shopify product variant, the price, my address, and a fifteen-minute fulfilment window.
+
+9
+00:00:39.268 --> 00:00:40.385
+No click from me.
+
+10
+00:00:40.385 --> 00:00:46.429
+The purchase fits my mandate, so PayPal authorizes thirty-four dollars from my saved wallet.
+
+11
+00:00:46.429 --> 00:00:48.268
+The money is held, not paid.
+
+12
+00:00:49.390 --> 00:00:53.020
+Only now does QuarantinePay place the order in Shopify.
+
+13
+00:00:53.020 --> 00:00:59.422
+In the store's admin, it appears authorized and unfulfilled, with the PayPal authorization noted.
+
+14
+00:01:00.524 --> 00:01:02.521
+The seller says it's delivered.
+
+15
+00:01:02.521 --> 00:01:03.939
+That claim is refused.
+
+16
+00:01:03.939 --> 00:01:08.900
+For a merchant order, the only evidence is the merchant's own Shopify record.
+
+17
+00:01:09.800 --> 00:01:13.703
+Now the merchant fulfils the order with a UPS tracking number.
+
+18
+00:01:13.703 --> 00:01:16.976
+The store's admin shows it fulfilled, with tracking.
+
+19
+00:01:18.077 --> 00:01:20.849
+QuarantinePay reads that order itself:
+
+20
+00:01:20.849 --> 00:01:27.051
+the right item, quantity one, my address, not cancelled, and fulfilled with tracking.
+
+21
+00:01:27.051 --> 00:01:29.021
+Seven of seven checks pass.
+
+22
+00:01:30.125 --> 00:01:34.901
+So the payment is captured automatically, and PayPal confirms the capture.
+
+23
+00:01:36.030 --> 00:01:39.059
+QuarantinePay then records the capture in Shopify.
+
+24
+00:01:39.059 --> 00:01:42.390
+The merchant's books show the order paid and fulfilled.
+
+25
+00:01:43.290 --> 00:01:46.307
+On the next order, the merchant cancels instead.
+
+26
+00:01:46.307 --> 00:01:51.210
+The cancellation fails the check, nothing is captured, and the hold is voided.
+
+27
+00:01:52.335 --> 00:01:57.812
+A real merchant, a held payment, and capture only on the merchant's own record.
+
+28
+00:01:57.812 --> 00:02:01.695
+Agents decide, and PayPal pays only for what was proven.

@@ -54,7 +54,7 @@ a{color:var(--mint)}
 <a class="btn secondary" href="https://github.com/manvendersingh21/QuarantinePay">Source code</a>
 <a class="btn secondary" href="https://github.com/manvendersingh21/QuarantinePay/blob/main/docs/VALIDATION.md">Verification evidence</a>
 </div>
-<p class="note">The live demo runs the full stack (Rust gateway, local Qwen3 model on a GPU, real PayPal <strong>Sandbox</strong>) behind a Cloudflare tunnel; sign-in required. Live link last updated 2026-11-10 23:16 UTC. If it doesn't load, the video below shows the same flow.</p>
+<p class="note">The live demo runs the full stack (Rust gateway, local Qwen3 model on a GPU, real PayPal <strong>Sandbox</strong>) behind a Cloudflare tunnel; sign-in required. Live link last updated 2026-11-10 23:51 UTC. If it doesn't load, the video below shows the same flow.</p>
 
 <video controls preload="metadata" poster="poster.png">
 <source src="quarantinepay-autonomous-demo.mp4" type="video/mp4">
@@ -70,6 +70,10 @@ a{color:var(--mint)}
 
 <h2>Buying from a real Shopify merchant</h2>
 <p class="note">The agent searches a live Shopify store first. It withholds a listing whose description tries to instruct it, and buys the lamp at the store's own price with no click. PayPal authorizes before the Shopify order exists. A seller's "delivered" claim is refused. Payment is captured only when QuarantinePay's own read of the merchant's Shopify order shows the exact item fulfilled with tracking to the buyer. Then Shopify is updated to match PayPal. This runs on a development store with test orders; the fulfilment is the merchant's own record, not carrier proof.</p>
+<video controls preload="metadata" poster="poster-shopify.png">
+<source src="quarantinepay-shopify-demo.mp4" type="video/mp4">
+<track kind="captions" src="quarantinepay-shopify-demo.en.vtt" srclang="en" label="English">
+</video>
 <div class="shots">
 <a href="7-shopify-discovery.png"><img src="7-shopify-discovery.png" alt="Live Shopify catalog: injected listing withheld, store-price lamp selected" loading="lazy"></a>
 <a href="8-shopify-fulfilment-captured.png"><img src="8-shopify-fulfilment-captured.png" alt="Merchant fulfilment verified from the Shopify order, captured automatically" loading="lazy"></a>
