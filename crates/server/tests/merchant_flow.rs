@@ -76,6 +76,24 @@ fn shopify(state: State, img: String) -> Router {
                     .map(|(g, _)| json!({"id":g,"name":"#1"}))
                     .collect();
                 json!({"orders":{"nodes":found}})
+            } else if q.contains("fulfillmentOrders") {
+                let gid = v["id"].as_str().unwrap();
+                let open = s.orders.get(gid).is_some_and(|o| o.2 == "open");
+                json!({"order":{"fulfillmentOrders":{"nodes":[{"id":gid.replace("/Order/","/FulfillmentOrder/"),"status": if open { "OPEN" } else { "CLOSED" }}]}}})
+            } else if q.contains("fulfillmentCreate") {
+                let gid = v["f"]["lineItemsByFulfillmentOrder"][0]["fulfillmentOrderId"]
+                    .as_str()
+                    .unwrap()
+                    .replace("/FulfillmentOrder/", "/Order/");
+                assert_eq!(v["f"]["notifyCustomer"], false);
+                let company = v["f"]["trackingInfo"]["company"]
+                    .as_str()
+                    .unwrap()
+                    .to_string();
+                let o = s.orders.get_mut(&gid).unwrap();
+                o.2 = "fulfilled";
+                o.3 = company;
+                json!({"fulfillmentCreate":{"fulfillment":{"id":"gid://shopify/Fulfillment/1","status":"SUCCESS"},"userErrors":[]}})
             } else if q.contains("orderCreate") {
                 let o = &v["order"];
                 assert_eq!(
@@ -121,6 +139,10 @@ fn shopify(state: State, img: String) -> Router {
                 s.settled
                     .insert(v["input"]["id"].as_str().unwrap().into(), "paid");
                 json!({"orderCapture":{"transaction":{"id":"gid://shopify/OrderTransaction/2","status":"SUCCESS","order":{"displayFinancialStatus":"PAID"}},"userErrors":[]}})
+            } else if q.contains("orderCancel") && q.contains("merchant simulator") {
+                // The merchant's own cancellation (simulator): the order is cancelled at the shop.
+                s.orders.get_mut(v["id"].as_str().unwrap()).unwrap().2 = "cancelled";
+                json!({"orderCancel":{"job":{"id":"gid://shopify/Job/2"},"orderCancelUserErrors":[]}})
             } else if q.contains("orderCancel") {
                 s.settled
                     .insert(v["id"].as_str().unwrap().into(), "cancelled");
@@ -440,6 +462,31 @@ async fn merchant_fulfilment_gates_capture() {
     .await;
     assert_eq!(shop.lock().unwrap().settled.get(&gid), None);
 
+    // Merchant simulator (hosted demo, for visitors without Shopify admin): it performs the
+    // merchant's action in Shopify; capture still follows only from QuarantinePay's own read.
+    let sim = |order: &str, action: &str| {
+        c.post(format!("{base}/ui/orders/{order}/merchant"))
+            .form(&[("action", action.to_string())])
+            .send()
+    };
+    let (_, order, gid) = purchase(&c, &base, None).await;
+    assert_eq!(
+        sim(&order, "pay_now").await.unwrap().status(),
+        StatusCode::BAD_REQUEST
+    );
+    sim(&order, "fulfil").await.unwrap();
+    let v = state(&c, &base, &order, "buyer_review").await;
+    assert_eq!(v["verification"]["passed"], true);
+    assert_eq!(shop.lock().unwrap().orders[&gid].3, "UPS");
+    let (_, order2, _) = purchase(&c, &base, None).await;
+    sim(&order2, "cancel").await.unwrap();
+    state(&c, &base, &order2, "voided").await;
+    // Only an authorized, placed order can be acted on.
+    assert_eq!(
+        sim(&order2, "fulfil").await.unwrap().status(),
+        StatusCode::CONFLICT
+    );
+
     // Under a mandate: a clean fulfilment auto-captures; tracking text that addresses the verifier
     // is held for the buyer and cannot be approved without an explicit override.
     let m: Value = c.post(format!("{base}/api/mandates")).json(&json!({"max_per_purchase_usd":90,"max_total_usd":200,"hours":24,"auto_capture_clean":true})).send().await.unwrap().error_for_status().unwrap().json().await.unwrap();
@@ -479,7 +526,7 @@ async fn merchant_fulfilment_gates_capture() {
     );
     assert_eq!(
         shop.lock().unwrap().created,
-        4,
+        6,
         "exactly one merchant order per purchase"
     );
 

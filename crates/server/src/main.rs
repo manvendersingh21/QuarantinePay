@@ -431,6 +431,57 @@ async fn ui_authorize(State(app): State<App>, h: HeaderMap, Path(id): Path<Uuid>
 struct DeliveryForm {
     fixture: String,
 }
+#[derive(Deserialize)]
+struct MerchantForm {
+    action: String,
+}
+/// Merchant simulator (hosted demo): performs the merchant's own action on its Shopify order so a
+/// visitor without Shopify admin access can complete the story. No payment effect: capture still
+/// depends only on QuarantinePay's own later read of the order.
+async fn ui_merchant(
+    State(app): State<App>,
+    h: HeaderMap,
+    Path(id): Path<Uuid>,
+    Form(form): Form<MerchantForm>,
+) -> Api<Redirect> {
+    authenticated(&app, &h, true)?;
+    if !["fulfil", "fulfil_injected", "cancel"].contains(&form.action.as_str()) {
+        return Err(Error(
+            StatusCode::BAD_REQUEST,
+            "unknown merchant action".into(),
+        ));
+    }
+    let order: Order =
+        sqlx::query_as("SELECT * FROM orders WHERE id=$1 AND buyer='demo-buyer' AND mode=$2")
+            .bind(id)
+            .bind(&app.config.mode)
+            .fetch_optional(&app.pool)
+            .await?
+            .ok_or_else(|| Error(StatusCode::NOT_FOUND, "order not found".into()))?;
+    let gid = order
+        .shopify_order
+        .clone()
+        .filter(|_| order.state == "authorized")
+        .ok_or_else(|| {
+            Error(
+                StatusCode::CONFLICT,
+                "only an authorized order already placed with the Shopify merchant can be acted on"
+                    .into(),
+            )
+        })?;
+    let result = match crate::shopify::simulate_merchant(&gid, &form.action).await {
+        Ok(v) => v,
+        Err(e) => json!({"action":form.action,"error":e.to_string()}),
+    };
+    db::event(
+        &app.pool,
+        Some(id),
+        "merchant_simulated",
+        json!({"simulated":true,"shopify_order":gid,"result":result,"payment_authority":false}),
+    )
+    .await?;
+    Ok(back(&app, &h))
+}
 async fn ui_deliver(
     State(app): State<App>,
     h: HeaderMap,
@@ -1317,6 +1368,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/ui/reset", post(ui_reset))
         .route("/ui/orders/{id}/authorize", post(ui_authorize))
         .route("/ui/orders/{id}/deliveries", post(ui_deliver))
+        .route("/ui/orders/{id}/merchant", post(ui_merchant))
         .route("/ui/orders/{id}/review", post(ui_review))
         .route("/ui/agent", post(ui_agent))
         .route("/ui/catalog", post(ui_catalog))

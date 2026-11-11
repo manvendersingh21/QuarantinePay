@@ -1555,6 +1555,19 @@ fn merchant_delivery(task: &Value) -> String {
                 d = esc(&deadline)
             ));
         }
+        if placed {
+            h.push_str(&format!(
+                concat!(
+                    r#"<div class="sim-head merchant-sim"><strong>Merchant simulator</strong><span class="badge">DEMO · ACTS IN SHOPIFY</span></div>"#,
+                    r#"<div class="actions">"#,
+                    r#"<form method="post" action="/ui/orders/{id}/merchant"><input type="hidden" name="action" value="fulfil"/><button>Merchant ships it (UPS tracking)</button></form>"#,
+                    r#"<form method="post" action="/ui/orders/{id}/merchant"><input type="hidden" name="action" value="fulfil_injected"/><button class="danger">Merchant ships with injected tracking text</button></form>"#,
+                    r#"<form method="post" action="/ui/orders/{id}/merchant"><input type="hidden" name="action" value="cancel"/><button class="danger">Merchant cancels the order</button></form>"#,
+                    r#"</div><p class="muted small">For visitors without Shopify admin access: each button does what the store owner would click in Shopify admin, on the real development-store order. It has no payment authority; QuarantinePay then reads the order from Shopify on its own.</p>"#
+                ),
+                id = id
+            ));
+        }
         h.push_str(&format!(
             r#"<div class="actions"><form method="post" action="/ui/orders/{id}/deliveries"><input type="hidden" name="fixture" value="forged"/><button class="danger">Seller claims "delivered" (will be refused)</button></form></div><p class="muted small">A seller's own claim is never evidence for a merchant order; trying it is logged and changes nothing.</p></div>"#
         ));
@@ -2342,6 +2355,7 @@ fn event_label(kind: &str) -> String {
         "merchant_cancelled" => "Merchant cancelled the Shopify order",
         "merchant_order_updated" => "Merchant's Shopify order updated",
         "merchant_error" => "Shopify merchant error",
+        "merchant_simulated" => "Merchant simulator acted in Shopify (no payment authority)",
         "unverified_claim_rejected" => "Seller's delivery claim refused",
         "agent_listing_selected" => "Real listing selected",
         "carrier_attestation_verified" => "Carrier attestation verified",
@@ -2366,7 +2380,9 @@ fn event_tone(kind: &str) -> &'static str {
         | "auto_capture_policy_satisfied"
         | "carrier_attestation_verified"
         | "merchant_fulfilment_observed" => return "good",
-        "merchant_order_placed" | "merchant_order_updated" => return "info",
+        "merchant_order_placed" | "merchant_order_updated" | "merchant_simulated" => {
+            return "info";
+        }
         "unverified_claim_rejected" | "merchant_cancelled" => return "bad",
         "merchant_error" => return "warn",
         "mandate_policy_check"
