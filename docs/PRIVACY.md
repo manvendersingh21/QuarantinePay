@@ -8,9 +8,10 @@ QuarantinePay defaults to local inference with Qwen3-30B-A3B Instruct (4-bit) th
 | --- | --- |
 | Assistant prompts and responses | Local Qwen model on the host GPU |
 | Product search queries | Local PostgreSQL mirror; local demo catalog if no import exists |
+| Listing photos | Fetched by the server only for an agent task whose buyer opted in to external search (never otherwise), from the image host the listing names; stored in PostgreSQL and served to the buyer from this origin. The request carries no query, cookie or buyer data |
 | Listing text used for injection screening | Local Qwen classifier; malformed classifier responses withhold results |
 | Delivery artifacts and deterministic acceptance results | Local verifier and PostgreSQL |
-| Optional vector screening | Loopback Elasticsearch only; remote endpoints rejected |
+| Optional Elastic semantic screening | Listing sentences embedded by the local Ollama model and compared in a loopback Elasticsearch only; remote endpoints rejected, no proxies or redirects |
 | Approved payment amount, currency, recipient, intent reference, and API authentication | PayPal Sandbox |
 
 A precise demo claim is: **“AI reasoning and delivery verification stay on our server. PayPal handles the approved payment.”** Payment integration requires sending approved payment fields and credentials to PayPal. Do not claim that every byte stays on the host.

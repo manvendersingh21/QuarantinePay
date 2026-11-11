@@ -3,7 +3,10 @@ use ed25519_dalek::{Signature, Signer, SigningKey, VerifyingKey};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
+pub mod contract;
+pub mod product;
 mod scenarios;
+pub use contract::{CONTRACT_SKU, PurchaseContract};
 pub use scenarios::{
     Scenario, ScenarioTerms, scenario, scenario_fixture, scenarios, verify_scenario,
 };
@@ -28,6 +31,10 @@ pub struct Intent {
     pub policy_digest: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub scenario: Option<ScenarioTerms>,
+    /// Agent-negotiated, buyer-approved contract. Absent on catalog and legacy intents, so their
+    /// signed bytes are unchanged.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub contract: Option<PurchaseContract>,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -44,7 +51,23 @@ impl SignedIntent {
         ensure!(self.intent.version == 1, "unsupported intent version");
         ensure!(self.intent.buyer == buyer, "buyer mismatch");
         ensure!(self.intent.expires_at > now, "expired intent");
-        if let Some(terms) = &self.intent.scenario {
+        if let Some(contract) = &self.intent.contract {
+            ensure!(
+                self.intent.scenario.is_none(),
+                "an intent cannot carry both catalog and contract terms"
+            );
+            contract.validate()?;
+            ensure!(
+                self.intent.sku == CONTRACT_SKU
+                    && self.intent.amount_minor == contract.amount_minor
+                    && self.intent.currency == contract.currency,
+                "contract price or SKU mismatch"
+            );
+            ensure!(
+                self.intent.policy_digest == contract.digest(),
+                "contract policy mismatch"
+            );
+        } else if let Some(terms) = &self.intent.scenario {
             let offer =
                 scenario(&terms.id).ok_or_else(|| anyhow::anyhow!("unsupported scenario"))?;
             ensure!(*terms == offer.signed_terms(), "scenario terms mismatch");
@@ -159,7 +182,46 @@ mod tests {
             expires_at: 200,
             policy_digest: policy_digest(),
             scenario: None,
+            contract: None,
         }
+    }
+    #[test]
+    fn contract_intents_are_signed_and_policy_bound() {
+        let key = SigningKey::from_bytes(&[11; 32]);
+        let objective = contract::parse_objective(
+            "Market research report on robotics under $100, three competitors, 5 sources",
+        )
+        .bounded()
+        .unwrap();
+        let c = contract::compile_contract(&objective, &contract::negotiate(&objective)).unwrap();
+        let mut value = intent();
+        value.sku = CONTRACT_SKU.into();
+        value.amount_minor = c.amount_minor;
+        value.policy_digest = c.digest();
+        value.contract = Some(c);
+        let signed = SignedIntent::sign(value, &key).unwrap();
+        signed.verify(&key.verifying_key(), "buyer", 100).unwrap();
+        // Weakening the signed contract breaks the signature.
+        let mut altered = signed.clone();
+        altered.intent.contract.as_mut().unwrap().minimum_sources = 1;
+        assert!(altered.verify(&key.verifying_key(), "buyer", 100).is_err());
+        // Even a validly re-signed weaker contract fails policy binding unless digest and price match.
+        let resigned = SignedIntent::sign(altered.intent.clone(), &key).unwrap();
+        assert!(resigned.verify(&key.verifying_key(), "buyer", 100).is_err());
+        // An over-ceiling contract cannot be signed into a valid intent at all.
+        let mut over = altered.intent;
+        let oc = over.contract.as_mut().unwrap();
+        oc.minimum_sources = 5;
+        oc.budget_minor = 90_000;
+        oc.amount_minor = 80_000;
+        over.amount_minor = 80_000;
+        over.policy_digest = over.contract.as_ref().unwrap().digest();
+        let signed_over = SignedIntent::sign(over, &key).unwrap();
+        assert!(
+            signed_over
+                .verify(&key.verifying_key(), "buyer", 100)
+                .is_err()
+        );
     }
     #[test]
     fn rejects_each_bound_field_change() {

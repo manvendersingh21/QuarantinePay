@@ -1,8 +1,16 @@
+mod agent;
+mod analyst;
+mod carrier;
 mod catalog_cache;
 mod config;
 mod db;
+mod discovery;
+mod elastic;
 mod inference;
 mod integrations;
+mod mandate;
+mod media;
+mod merchant;
 mod paypal;
 mod shopify;
 mod worker;
@@ -15,7 +23,10 @@ use axum::{
 };
 use config::Config;
 use db::Order;
-use quarantinepay_core::{Intent, SignedIntent, policy_digest, scenario, scenario_fixture};
+use quarantinepay_core::{
+    CONTRACT_SKU, Intent, PurchaseContract, SignedIntent, contract::contract_fixture,
+    policy_digest, scenario, scenario_fixture,
+};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use sqlx::PgPool;
@@ -179,7 +190,7 @@ async fn dashboard(
         Vec::new()
     };
     let events = if logged {
-        sqlx::query_scalar::<_,Value>("SELECT jsonb_build_object('id',id,'kind',kind,'detail',detail,'at',created_at) FROM events WHERE buyer='demo-buyer' AND (order_id IS NULL OR order_id IN (SELECT id FROM orders WHERE mode=$1)) ORDER BY id DESC LIMIT 30").bind(&app.config.mode).fetch_all(&app.pool).await?
+        sqlx::query_scalar::<_,Value>("SELECT jsonb_build_object('id',id,'kind',kind,'detail',detail,'at',created_at) FROM events WHERE buyer='demo-buyer' AND (order_id IS NULL OR order_id IN (SELECT id FROM orders WHERE mode=$1)) AND (task_id IS NULL OR task_id IN (SELECT id FROM agent_tasks WHERE mode=$1)) ORDER BY id DESC LIMIT 30").bind(&app.config.mode).fetch_all(&app.pool).await?
     } else {
         Vec::new()
     };
@@ -228,6 +239,7 @@ async fn mint(app: &App, input: Confirmation) -> Api<SignedIntent> {
             .as_ref()
             .map_or_else(policy_digest, |s| s.signed_terms().digest()),
         scenario: selected.map(|s| s.signed_terms()),
+        contract: None,
     };
     let signed = SignedIntent::sign(intent, &app.config.key)?;
     sqlx::query("INSERT INTO intents(id,buyer,token,mode) VALUES($1,$2,$3,$4)")
@@ -320,6 +332,26 @@ async fn deliver_inner(app: &App, id: Uuid, artifact: Value) -> Api<()> {
             "artifact too large".into(),
         ));
     }
+    // A merchant-fulfilled purchase accepts only the record QuarantinePay reads from Shopify itself.
+    let merchant: Option<String> = sqlx::query_scalar("SELECT intent->'intent'->'contract'->'product'->>'source' FROM orders WHERE id=$1 AND buyer='demo-buyer' AND mode=$2")
+        .bind(id)
+        .bind(&app.config.mode)
+        .fetch_optional(&app.pool)
+        .await?
+        .flatten();
+    if merchant.as_deref() == Some(quarantinepay_core::product::SHOPIFY_SOURCE) {
+        db::event(
+            &app.pool,
+            Some(id),
+            "unverified_claim_rejected",
+            json!({"reason":"Delivery for a Shopify purchase is read from the merchant's Shopify order by QuarantinePay; submitted delivery claims are ignored","bytes":serde_json::to_vec(&artifact).map(|b| b.len()).unwrap_or(0)}),
+        )
+        .await?;
+        return Err(Error(
+            StatusCode::CONFLICT,
+            "this order's delivery evidence comes only from the merchant's Shopify record; submitted claims are not accepted".into(),
+        ));
+    }
     let result=sqlx::query("UPDATE orders SET artifact=$2,state='quarantined',updated_at=now() WHERE id=$1 AND buyer='demo-buyer' AND state='authorized' AND deadline>now() AND mode=$3").bind(id).bind(artifact).bind(&app.config.mode).execute(&app.pool).await?;
     if result.rows_affected() != 1 {
         return Err(Error(
@@ -393,7 +425,7 @@ async fn ui_purchase(
 async fn ui_authorize(State(app): State<App>, h: HeaderMap, Path(id): Path<Uuid>) -> Api<Redirect> {
     authenticated(&app, &h, true)?;
     authorize_inner(&app, id).await?;
-    Ok(Redirect::to("/"))
+    Ok(back(&app, &h))
 }
 #[derive(Deserialize)]
 struct DeliveryForm {
@@ -406,7 +438,7 @@ async fn ui_deliver(
     Form(form): Form<DeliveryForm>,
 ) -> Api<Redirect> {
     authenticated(&app, &h, true)?;
-    if !["pass", "fail"].contains(&form.fixture.as_str()) {
+    if !["pass", "fail", "malicious", "forged", "wrong_item"].contains(&form.fixture.as_str()) {
         return Err(Error(StatusCode::BAD_REQUEST, "unknown fixture".into()));
     }
     let order: Order =
@@ -417,7 +449,45 @@ async fn ui_deliver(
             .await?
             .ok_or_else(|| Error(StatusCode::NOT_FOUND, "order not found".into()))?;
     let signed: SignedIntent = serde_json::from_value(order.intent).map_err(anyhow::Error::from)?;
-    let artifact = if let Some(terms) = signed.intent.scenario {
+    if signed
+        .intent
+        .contract
+        .as_ref()
+        .and_then(|c| c.product.as_ref())
+        .is_some_and(|p| p.source == quarantinepay_core::product::SHOPIFY_SOURCE)
+    {
+        // Demonstrates that a seller-style claim cannot release funds; it is logged and refused.
+        let claim = json!({"claimed_by":"seller","status":"delivered","tracking_number":"1Z999AA10123456784","note":"Delivered. Proof of delivery attached."});
+        let _ = deliver_inner(&app, id, claim).await;
+        return Ok(back(&app, &h));
+    }
+    let artifact = if let Some(contract) = signed
+        .intent
+        .contract
+        .as_ref()
+        .filter(|c| c.product.is_some())
+    {
+        // Simulated fulfilment: honest examples are signed by the carrier; a forged proof is not.
+        quarantinepay_core::product::product_fixture(
+            contract,
+            &id.to_string(),
+            &form.fixture,
+            &carrier::key()?,
+            chrono::Utc::now().timestamp(),
+        )?
+    } else if ["forged", "wrong_item"].contains(&form.fixture.as_str()) {
+        return Err(Error(
+            StatusCode::BAD_REQUEST,
+            "carrier examples apply to product purchases".into(),
+        ));
+    } else if let Some(contract) = &signed.intent.contract {
+        contract_fixture(contract, &form.fixture)
+    } else if form.fixture == "malicious" {
+        return Err(Error(
+            StatusCode::BAD_REQUEST,
+            "the injected-instruction example applies to agent contracts".into(),
+        ));
+    } else if let Some(terms) = signed.intent.scenario {
         scenario_fixture(&terms.id, form.fixture == "pass")
     } else {
         serde_json::from_str(if form.fixture == "pass" {
@@ -428,14 +498,23 @@ async fn ui_deliver(
         .unwrap()
     };
     deliver_inner(&app, id, artifact).await?;
-    Ok(Redirect::to("/"))
+    db::event(
+        &app.pool,
+        Some(id),
+        "seller_delivery",
+        json!({"simulated":true,"example":form.fixture}),
+    )
+    .await?;
+    Ok(back(&app, &h))
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Review {
     decision: String,
+    #[serde(default)]
+    acknowledge_risk: bool,
 }
-async fn review_inner(app: &App, id: Uuid, decision: &str) -> Api<()> {
+async fn review_inner(app: &App, id: Uuid, decision: &str, acknowledge_risk: bool) -> Api<()> {
     if !["approve", "reject"].contains(&decision) {
         return Err(Error(
             StatusCode::BAD_REQUEST,
@@ -444,8 +523,25 @@ async fn review_inner(app: &App, id: Uuid, decision: &str) -> Api<()> {
     }
     let capture = decision == "approve";
     let mut tx = app.pool.begin().await?;
-    let result = sqlx::query("UPDATE orders SET state=$2, operation=$3, request_id=$4, review_decision=$5, updated_at=now() WHERE id=$1 AND buyer='demo-buyer' AND mode=$6 AND state='buyer_review' AND deadline>now() AND (intent->'intent'->>'expires_at')::bigint>extract(epoch FROM now())")
-        .bind(id).bind(if capture { "capture_pending" } else { "void_pending" }).bind(if capture { "capture" } else { "void" }).bind(Uuid::new_v4()).bind(decision).bind(&app.config.mode).execute(&mut *tx).await?;
+    // A policy hold set by deterministic rules or the analyst blocks capture unless the buyer
+    // explicitly overrides it. The model itself can never lift a hold.
+    let hold: Option<Option<Value>> = sqlx::query_scalar(
+        "SELECT analysis FROM orders WHERE id=$1 AND buyer='demo-buyer' AND mode=$2 FOR UPDATE",
+    )
+    .bind(id)
+    .bind(&app.config.mode)
+    .fetch_optional(&mut *tx)
+    .await?;
+    let policy_hold = hold.flatten().is_some_and(|a| a["policy_hold"] == true);
+    if capture && policy_hold && !acknowledge_risk {
+        return Err(Error(
+            StatusCode::CONFLICT,
+            "policy hold: untrusted instructions were detected in this delivery; reject it, or acknowledge the risk to override".into(),
+        ));
+    }
+    let risk_override = capture && policy_hold;
+    let result = sqlx::query("UPDATE orders SET state=$2, operation=$3, request_id=$4, review_decision=$5, risk_override=$7, updated_at=now() WHERE id=$1 AND buyer='demo-buyer' AND mode=$6 AND state='buyer_review' AND deadline>now() AND (intent->'intent'->>'expires_at')::bigint>extract(epoch FROM now())")
+        .bind(id).bind(if capture { "capture_pending" } else { "void_pending" }).bind(if capture { "capture" } else { "void" }).bind(Uuid::new_v4()).bind(decision).bind(&app.config.mode).bind(risk_override).execute(&mut *tx).await?;
     if result.rows_affected() != 1 {
         return Err(Error(
             StatusCode::CONFLICT,
@@ -456,9 +552,18 @@ async fn review_inner(app: &App, id: Uuid, decision: &str) -> Api<()> {
         &mut tx,
         Some(id),
         "buyer_review",
-        json!({"decision":decision}),
+        json!({"decision":decision,"risk_override":risk_override}),
     )
     .await?;
+    if risk_override {
+        db::event_tx(
+            &mut tx,
+            Some(id),
+            "risk_override",
+            json!({"reason":"Buyer acknowledged flagged content and overrode the policy hold"}),
+        )
+        .await?;
+    }
     tx.commit().await?;
     Ok(())
 }
@@ -469,7 +574,7 @@ async fn review(
     Json(input): Json<Review>,
 ) -> Api<Json<Value>> {
     authenticated(&app, &h, true)?;
-    review_inner(&app, id, &input.decision).await?;
+    review_inner(&app, id, &input.decision, input.acknowledge_risk).await?;
     Ok(Json(json!({"decision":input.decision})))
 }
 async fn ui_review(
@@ -479,8 +584,8 @@ async fn ui_review(
     Form(input): Form<Review>,
 ) -> Api<Redirect> {
     authenticated(&app, &h, true)?;
-    review_inner(&app, id, &input.decision).await?;
-    Ok(Redirect::to("/"))
+    review_inner(&app, id, &input.decision, input.acknowledge_risk).await?;
+    Ok(back(&app, &h))
 }
 async fn shopify_dev_store(State(app): State<App>, h: HeaderMap) -> Api<Json<Value>> {
     authenticated(&app, &h, false)?;
@@ -495,8 +600,14 @@ async fn ui_reset(State(app): State<App>, h: HeaderMap) -> Api<Redirect> {
         ));
     }
     let mut tx = app.pool.begin().await?;
-    sqlx::query("DELETE FROM events WHERE order_id IN (SELECT id FROM orders WHERE mode='replay' AND buyer='demo-buyer')").execute(&mut *tx).await?;
+    sqlx::query("DELETE FROM events WHERE order_id IN (SELECT id FROM orders WHERE mode='replay' AND buyer='demo-buyer') OR task_id IN (SELECT id FROM agent_tasks WHERE mode='replay' AND buyer='demo-buyer')").execute(&mut *tx).await?;
+    sqlx::query("DELETE FROM agent_tasks WHERE mode='replay' AND buyer='demo-buyer'")
+        .execute(&mut *tx)
+        .await?;
     sqlx::query("DELETE FROM orders WHERE mode='replay' AND buyer='demo-buyer'")
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query("DELETE FROM mandates WHERE mode='replay' AND buyer='demo-buyer'")
         .execute(&mut *tx)
         .await?;
     sqlx::query("DELETE FROM intents WHERE mode='replay' AND buyer='demo-buyer'")
@@ -617,7 +728,7 @@ async fn events(
     let last = cursor.after.unwrap_or(0).max(0);
     let stream = futures_util::stream::unfold((app, last), |(app, last)| async move {
         tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-        let rows=sqlx::query_scalar::<_,Value>("SELECT jsonb_build_object('id',id,'kind',kind,'order_id',order_id,'detail',detail,'at',created_at) FROM events WHERE buyer='demo-buyer' AND id>$1 AND (order_id IS NULL OR order_id IN (SELECT id FROM orders WHERE mode=$2)) ORDER BY id LIMIT 100").bind(last).bind(&app.config.mode).fetch_all(&app.pool).await.unwrap_or_default();
+        let rows=sqlx::query_scalar::<_,Value>("SELECT jsonb_build_object('id',id,'kind',kind,'order_id',order_id,'task_id',task_id,'detail',detail,'at',created_at) FROM events WHERE buyer='demo-buyer' AND id>$1 AND (order_id IS NULL OR order_id IN (SELECT id FROM orders WHERE mode=$2)) AND (task_id IS NULL OR task_id IN (SELECT id FROM agent_tasks WHERE mode=$2)) ORDER BY id LIMIT 100").bind(last).bind(&app.config.mode).fetch_all(&app.pool).await.unwrap_or_default();
         let next = rows.last().and_then(|r| r["id"].as_i64()).unwrap_or(last);
         Some((
             Ok(Event::default()
@@ -628,6 +739,503 @@ async fn events(
         ))
     });
     Ok(Sse::new(stream).keep_alive(axum::response::sse::KeepAlive::default()))
+}
+/// Return to the agent console when a form was posted from it; otherwise to the command center.
+/// Only same-origin `/agent` paths made of safe characters are accepted (no open redirect).
+fn back(app: &App, h: &HeaderMap) -> Redirect {
+    let path = h
+        .get(header::REFERER)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|r| r.strip_prefix(app.config.base.as_str()))
+        .filter(|p| {
+            p.starts_with("/agent")
+                && p.len() <= 64
+                && p.bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || b == b'/' || b == b'-')
+        })
+        .unwrap_or("/");
+    Redirect::to(path)
+}
+async fn mint_contract(app: &App, contract: PurchaseContract) -> Api<SignedIntent> {
+    contract.validate()?;
+    if app.config.merchant.is_empty() {
+        return Err(Error(
+            StatusCode::BAD_REQUEST,
+            "merchant not configured".into(),
+        ));
+    }
+    let intent = Intent {
+        version: 1,
+        id: Uuid::new_v4(),
+        buyer: "demo-buyer".into(),
+        sku: CONTRACT_SKU.into(),
+        merchant_id: app.config.merchant.clone(),
+        amount_minor: contract.amount_minor,
+        currency: contract.currency.clone(),
+        // Long enough for PayPal approval, delivery, analysis and review; capture after expiry is refused.
+        expires_at: chrono::Utc::now().timestamp() + 1800,
+        policy_digest: contract.digest(),
+        scenario: None,
+        contract: Some(contract),
+    };
+    let signed = SignedIntent::sign(intent, &app.config.key)?;
+    sqlx::query("INSERT INTO intents(id,buyer,token,mode) VALUES($1,$2,$3,$4)")
+        .bind(signed.intent.id)
+        .bind(&signed.intent.buyer)
+        .bind(serde_json::to_value(&signed).unwrap())
+        .bind(&app.config.mode)
+        .execute(&app.pool)
+        .await?;
+    Ok(signed)
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct TaskRequest {
+    request: String,
+    /// Mandate the agent may buy under without asking (form checkbox or API field).
+    #[serde(default, alias = "mandate_id")]
+    use_mandate: Option<String>,
+    /// Opt-in: allow the product search terms (only) to be sent to Channel3.
+    #[serde(default)]
+    external_discovery: Option<Value>,
+}
+fn opted_in(v: &Option<Value>) -> bool {
+    match v {
+        Some(Value::Bool(b)) => *b,
+        Some(Value::String(s)) => matches!(s.as_str(), "true" | "on" | "1"),
+        _ => false,
+    }
+}
+fn mandate_choice(v: &Option<String>) -> Api<Option<Uuid>> {
+    match v.as_deref().map(str::trim) {
+        None | Some("") => Ok(None),
+        Some(s) => s
+            .parse()
+            .map(Some)
+            .map_err(|_| Error(StatusCode::BAD_REQUEST, "invalid mandate id".into())),
+    }
+}
+/// Autonomous purchase under a mandate. The mandate row stays locked while the policy check runs
+/// and the signed intent and order are written, so concurrent tasks cannot overspend it.
+pub(crate) async fn autonomous_checkout(
+    app: &App,
+    task: Uuid,
+    mandate_id: Uuid,
+    contract: &PurchaseContract,
+) -> anyhow::Result<(bool, Value, Option<Uuid>)> {
+    let mut tx = app.pool.begin().await?;
+    let decision = mandate::check(&mut tx, app, mandate_id, contract).await?;
+    if !decision.approved {
+        tx.commit().await?;
+        return Ok((false, decision.record, None));
+    }
+    contract.validate()?;
+    anyhow::ensure!(!app.config.merchant.is_empty(), "merchant not configured");
+    let intent = Intent {
+        version: 1,
+        id: Uuid::new_v4(),
+        buyer: "demo-buyer".into(),
+        sku: CONTRACT_SKU.into(),
+        merchant_id: app.config.merchant.clone(),
+        amount_minor: contract.amount_minor,
+        currency: contract.currency.clone(),
+        expires_at: chrono::Utc::now().timestamp() + 1800,
+        policy_digest: contract.digest(),
+        scenario: None,
+        contract: Some(contract.clone()),
+    };
+    let signed = SignedIntent::sign(intent, &app.config.key)?;
+    signed.verify(
+        &app.config.key.verifying_key(),
+        "demo-buyer",
+        chrono::Utc::now().timestamp(),
+    )?;
+    let token = serde_json::to_value(&signed)?;
+    sqlx::query("INSERT INTO intents(id,buyer,token,mode,used) VALUES($1,'demo-buyer',$2,$3,true)")
+        .bind(signed.intent.id)
+        .bind(&token)
+        .bind(&app.config.mode)
+        .execute(&mut *tx)
+        .await?;
+    let order = Uuid::new_v4();
+    sqlx::query("INSERT INTO orders(id,buyer,intent,state,operation,request_id,mode,simulation_outcome,mandate_id) VALUES($1,'demo-buyer',$2,'create_pending','create',$3,$4,'approve',$5)")
+        .bind(order)
+        .bind(&token)
+        .bind(Uuid::new_v4())
+        .bind(&app.config.mode)
+        .bind(mandate_id)
+        .execute(&mut *tx)
+        .await?;
+    db::event_tx(
+        &mut tx,
+        Some(order),
+        "intent_bound",
+        json!({"amount_minor":contract.amount_minor,"currency":"USD","mode":app.config.mode,"mandate_id":mandate_id}),
+    )
+    .await?;
+    db::event_tx(
+        &mut tx,
+        Some(order),
+        "agent_autonomous_purchase",
+        json!({"task_id":task,"mandate_id":mandate_id,"seller":contract.seller,"amount_minor":contract.amount_minor,"contract_digest":contract.digest(),"auto_capture_clean":!contract.buyer_review_required,"human_click":false}),
+    )
+    .await?;
+    tx.commit().await?;
+    Ok((true, decision.record, Some(order)))
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct MandateForm {
+    max_per_purchase_usd: f64,
+    max_total_usd: f64,
+    hours: i64,
+    #[serde(default)]
+    auto_capture_clean: bool,
+}
+fn mandate_terms(f: &MandateForm) -> Api<mandate::MandateTerms> {
+    let minor = |v: f64| -> Api<u64> {
+        if !v.is_finite() || v <= 0.0 || v > 100_000.0 {
+            return Err(Error(StatusCode::BAD_REQUEST, "invalid amount".into()));
+        }
+        Ok((v * 100.0).round() as u64)
+    };
+    Ok(mandate::MandateTerms {
+        max_per_purchase_minor: minor(f.max_per_purchase_usd)?,
+        max_total_minor: minor(f.max_total_usd)?,
+        hours: f.hours,
+        auto_capture_clean: f.auto_capture_clean,
+    })
+}
+async fn api_create_mandate(
+    State(app): State<App>,
+    h: HeaderMap,
+    Json(f): Json<MandateForm>,
+) -> Api<Json<Value>> {
+    authenticated(&app, &h, true)?;
+    Ok(Json(mandate::create(&app, mandate_terms(&f)?).await?))
+}
+async fn api_mandates(State(app): State<App>, h: HeaderMap) -> Api<Json<Value>> {
+    authenticated(&app, &h, false)?;
+    Ok(Json(json!({"mandates":mandate::list(&app).await?})))
+}
+async fn api_activate_mandate(
+    State(app): State<App>,
+    h: HeaderMap,
+    Path(id): Path<Uuid>,
+) -> Api<Json<Value>> {
+    authenticated(&app, &h, true)?;
+    mandate::activate(&app, id).await?;
+    Ok(Json(json!({"state":"active"})))
+}
+async fn api_revoke_mandate(
+    State(app): State<App>,
+    h: HeaderMap,
+    Path(id): Path<Uuid>,
+) -> Api<Json<Value>> {
+    authenticated(&app, &h, true)?;
+    mandate::revoke(&app, id).await?;
+    Ok(Json(json!({"state":"revoked"})))
+}
+async fn ui_create_mandate(
+    State(app): State<App>,
+    h: HeaderMap,
+    Form(f): Form<MandateForm>,
+) -> Api<Redirect> {
+    authenticated(&app, &h, true)?;
+    mandate::create(&app, mandate_terms(&f)?).await?;
+    Ok(Redirect::to("/agent"))
+}
+async fn ui_activate_mandate(
+    State(app): State<App>,
+    h: HeaderMap,
+    Path(id): Path<Uuid>,
+) -> Api<Redirect> {
+    authenticated(&app, &h, true)?;
+    mandate::activate(&app, id).await?;
+    Ok(Redirect::to("/agent"))
+}
+async fn ui_revoke_mandate(
+    State(app): State<App>,
+    h: HeaderMap,
+    Path(id): Path<Uuid>,
+) -> Api<Redirect> {
+    authenticated(&app, &h, true)?;
+    mandate::revoke(&app, id).await?;
+    Ok(Redirect::to("/agent"))
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct TaskApproval {
+    proposal_digest: String,
+    #[serde(default)]
+    outcome: String,
+}
+/// The buyer approves one exact contract digest. Approval is single-use and re-validated.
+async fn approve_task_inner(app: &App, id: Uuid, input: &TaskApproval) -> Api<Uuid> {
+    let outcome = if input.outcome.is_empty() {
+        "approve"
+    } else {
+        input.outcome.as_str()
+    };
+    if !["approve", "decline", "ambiguous"].contains(&outcome)
+        || (app.config.mode != "replay" && outcome != "approve")
+    {
+        return Err(Error(
+            StatusCode::BAD_REQUEST,
+            "invalid simulated payment outcome".into(),
+        ));
+    }
+    let proposal: Option<Value> = sqlx::query_scalar("UPDATE agent_tasks SET state='approved',updated_at=now() WHERE id=$1 AND buyer='demo-buyer' AND mode=$2 AND state='awaiting_approval' AND proposal_digest=$3 RETURNING proposal")
+        .bind(id)
+        .bind(&app.config.mode)
+        .bind(&input.proposal_digest)
+        .fetch_optional(&app.pool)
+        .await?;
+    let Some(proposal) = proposal else {
+        return Err(Error(
+            StatusCode::CONFLICT,
+            "the task is not awaiting approval or the approved digest does not match the proposed contract".into(),
+        ));
+    };
+    let result: Api<Uuid> = async {
+        let contract: PurchaseContract =
+            serde_json::from_value(proposal).map_err(anyhow::Error::from)?;
+        if contract.digest() != input.proposal_digest {
+            return Err(Error(
+                StatusCode::CONFLICT,
+                "stored proposal does not match its digest".into(),
+            ));
+        }
+        let signed = mint_contract(app, contract).await?;
+        checkout_inner(app, signed, outcome).await
+    }
+    .await;
+    match result {
+        Ok(order_id) => {
+            sqlx::query("UPDATE agent_tasks SET state='purchasing',order_id=$2,updated_at=now() WHERE id=$1")
+                .bind(id)
+                .bind(order_id)
+                .execute(&app.pool)
+                .await?;
+            db::task_event(
+                &app.pool,
+                id,
+                "agent_buyer_approved",
+                json!({"task_id":id,"order_id":order_id,"digest":input.proposal_digest,"signed_intent":true}),
+            )
+            .await?;
+            Ok(order_id)
+        }
+        Err(e) => {
+            sqlx::query(
+                "UPDATE agent_tasks SET state='failed',error=$2,updated_at=now() WHERE id=$1",
+            )
+            .bind(id)
+            .bind(&e.1)
+            .execute(&app.pool)
+            .await?;
+            Err(e)
+        }
+    }
+}
+async fn cancel_task_inner(app: &App, id: Uuid) -> Api<()> {
+    let r = sqlx::query("UPDATE agent_tasks SET state='cancelled',updated_at=now() WHERE id=$1 AND buyer='demo-buyer' AND mode=$2 AND state IN ('awaiting_approval','no_deal','failed')")
+        .bind(id)
+        .bind(&app.config.mode)
+        .execute(&app.pool)
+        .await?;
+    if r.rows_affected() != 1 {
+        return Err(Error(
+            StatusCode::CONFLICT,
+            "only an unapproved proposal can be cancelled".into(),
+        ));
+    }
+    db::task_event(&app.pool, id, "agent_cancelled", json!({"task_id":id})).await?;
+    Ok(())
+}
+async fn api_create_task(
+    State(app): State<App>,
+    h: HeaderMap,
+    Json(input): Json<TaskRequest>,
+) -> Api<Json<Value>> {
+    authenticated(&app, &h, true)?;
+    let id = agent::create(
+        &app,
+        &input.request,
+        mandate_choice(&input.use_mandate)?,
+        opted_in(&input.external_discovery),
+    )
+    .await?;
+    Ok(Json(json!({"id":id,"state":"planning"})))
+}
+async fn api_tasks(State(app): State<App>, h: HeaderMap) -> Api<Json<Value>> {
+    authenticated(&app, &h, false)?;
+    Ok(Json(json!({"tasks":agent::list(&app).await?})))
+}
+async fn api_task(State(app): State<App>, h: HeaderMap, Path(id): Path<Uuid>) -> Api<Json<Value>> {
+    authenticated(&app, &h, false)?;
+    agent::get(&app, id)
+        .await?
+        .map(Json)
+        .ok_or_else(|| Error(StatusCode::NOT_FOUND, "task not found".into()))
+}
+async fn api_approve_task(
+    State(app): State<App>,
+    h: HeaderMap,
+    Path(id): Path<Uuid>,
+    Json(input): Json<TaskApproval>,
+) -> Api<Json<Value>> {
+    authenticated(&app, &h, true)?;
+    let order_id = approve_task_inner(&app, id, &input).await?;
+    Ok(Json(json!({"order_id":order_id,"state":"create_pending"})))
+}
+async fn api_cancel_task(
+    State(app): State<App>,
+    h: HeaderMap,
+    Path(id): Path<Uuid>,
+) -> Api<Json<Value>> {
+    authenticated(&app, &h, true)?;
+    cancel_task_inner(&app, id).await?;
+    Ok(Json(json!({"state":"cancelled"})))
+}
+async fn api_analytics(State(app): State<App>, h: HeaderMap) -> Api<Json<Value>> {
+    authenticated(&app, &h, false)?;
+    Ok(Json(agent::analytics(&app).await?))
+}
+async fn ui_create_task(
+    State(app): State<App>,
+    h: HeaderMap,
+    Form(input): Form<TaskRequest>,
+) -> Api<Redirect> {
+    authenticated(&app, &h, true)?;
+    let id = agent::create(
+        &app,
+        &input.request,
+        mandate_choice(&input.use_mandate)?,
+        opted_in(&input.external_discovery),
+    )
+    .await?;
+    Ok(Redirect::to(&format!("/agent/{id}")))
+}
+async fn ui_approve_task(
+    State(app): State<App>,
+    h: HeaderMap,
+    Path(id): Path<Uuid>,
+    Form(input): Form<TaskApproval>,
+) -> Api<Redirect> {
+    authenticated(&app, &h, true)?;
+    approve_task_inner(&app, id, &input).await?;
+    Ok(Redirect::to(&format!("/agent/{id}")))
+}
+async fn ui_cancel_task(
+    State(app): State<App>,
+    h: HeaderMap,
+    Path(id): Path<Uuid>,
+) -> Api<Redirect> {
+    authenticated(&app, &h, true)?;
+    cancel_task_inner(&app, id).await?;
+    Ok(Redirect::to(&format!("/agent/{id}")))
+}
+async fn agent_page_inner(
+    app: &App,
+    h: &HeaderMap,
+    id: Option<Uuid>,
+    message: String,
+) -> Api<Html<String>> {
+    let logged = authenticated(app, h, false).is_ok();
+    let (tasks, selected, events, mandates) = if logged {
+        let tasks = agent::list(app).await?;
+        let selected_id = id.or_else(|| {
+            tasks
+                .first()
+                .and_then(|t| t["id"].as_str())
+                .and_then(|s| s.parse().ok())
+        });
+        let selected = match selected_id {
+            Some(id) => agent::get(app, id).await?,
+            None => None,
+        };
+        let events = agent::events(app, selected_id).await?;
+        (tasks, selected, events, mandate::list(app).await?)
+    } else {
+        (Vec::new(), None, Vec::new(), Vec::new())
+    };
+    Ok(Html(quarantinepay_ui::render_agent(
+        app.config.mode.to_uppercase(),
+        app.config.inference.label().into(),
+        tasks,
+        selected,
+        events,
+        mandates,
+        logged,
+        message,
+    )))
+}
+async fn agent_page(
+    State(app): State<App>,
+    h: HeaderMap,
+    Query(q): Query<PageQuery>,
+) -> Api<Html<String>> {
+    agent_page_inner(&app, &h, None, q.message.unwrap_or_default()).await
+}
+async fn agent_task_page(
+    State(app): State<App>,
+    h: HeaderMap,
+    Path(id): Path<Uuid>,
+    Query(q): Query<PageQuery>,
+) -> Api<Html<String>> {
+    agent_page_inner(&app, &h, Some(id), q.message.unwrap_or_default()).await
+}
+/// A listing photo fetched and vetted during discovery, served from this origin only to a signed-in
+/// buyer. Served as an inert, sandboxed resource: never sniffed, never scriptable.
+async fn media_file(
+    State(app): State<App>,
+    h: HeaderMap,
+    Path(sha): Path<String>,
+) -> Api<Response> {
+    authenticated(&app, &h, false)?;
+    let (content_type, bytes) = media::load(&app, &sha)
+        .await?
+        .ok_or_else(|| Error(StatusCode::NOT_FOUND, "not found".into()))?;
+    Ok((
+        [
+            (header::CONTENT_TYPE, content_type),
+            (header::X_CONTENT_TYPE_OPTIONS, "nosniff".into()),
+            (
+                header::CONTENT_SECURITY_POLICY,
+                "sandbox; default-src 'none'".into(),
+            ),
+            (header::CACHE_CONTROL, "private, max-age=86400".into()),
+            (
+                header::HeaderName::from_static("cross-origin-resource-policy"),
+                "same-origin".into(),
+            ),
+        ],
+        bytes,
+    )
+        .into_response())
+}
+async fn intelligence_page(State(app): State<App>, h: HeaderMap) -> Response {
+    let logged = authenticated(&app, &h, false).is_ok();
+    let nonce = {
+        use rand::RngCore;
+        let mut bytes = [0u8; 18];
+        rand::thread_rng().fill_bytes(&mut bytes);
+        hex::encode(bytes)
+    };
+    let csp = format!(
+        "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'nonce-{nonce}'; connect-src 'self'; img-src 'self' data:; frame-ancestors 'none'; base-uri 'none'; form-action 'self'"
+    );
+    (
+        [(header::CONTENT_SECURITY_POLICY, csp)],
+        Html(quarantinepay_ui::render_intelligence(
+            app.config.mode.to_uppercase(),
+            app.config.inference.label().into(),
+            nonce,
+            logged,
+        )),
+    )
+        .into_response()
 }
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -649,7 +1257,11 @@ async fn main() -> anyhow::Result<()> {
         pool,
         client,
     };
-    integrations::prepare_elastic(&app).await?;
+    // Elastic semantic screening is an extra layer; its absence must not take the payment gateway
+    // down. Discovery records it as unavailable and retries seeding on the next search.
+    if let Err(e) = elastic::prepare(&app).await {
+        tracing::warn!(error=%e, "Elastic injection corpus unavailable; continuing without it");
+    }
     tokio::spawn(worker::run(app.clone()));
     let router = Router::new()
         .nest_service("/assets", tower_http::services::ServeDir::new("assets"))
@@ -680,6 +1292,24 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/catalog/search", get(catalog))
         .route("/api/catalog/sync",post(catalog_sync))
         .route("/api/agent/runs", post(agent))
+        .route("/api/agent/tasks", post(api_create_task).get(api_tasks))
+        .route("/api/agent/tasks/{id}", get(api_task))
+        .route("/api/agent/tasks/{id}/approve", post(api_approve_task))
+        .route("/api/agent/tasks/{id}/cancel", post(api_cancel_task))
+        .route("/api/analytics/transactions", get(api_analytics))
+        .route("/api/mandates", post(api_create_mandate).get(api_mandates))
+        .route("/api/mandates/{id}/activate", post(api_activate_mandate))
+        .route("/api/mandates/{id}/revoke", post(api_revoke_mandate))
+        .route("/ui/mandates", post(ui_create_mandate))
+        .route("/ui/mandates/{id}/activate", post(ui_activate_mandate))
+        .route("/ui/mandates/{id}/revoke", post(ui_revoke_mandate))
+        .route("/agent", get(agent_page))
+        .route("/agent/{id}", get(agent_task_page))
+        .route("/intelligence", get(intelligence_page))
+        .route("/media/{sha256}", get(media_file))
+        .route("/ui/agent/tasks", post(ui_create_task))
+        .route("/ui/agent/tasks/{id}/approve", post(ui_approve_task))
+        .route("/ui/agent/tasks/{id}/cancel", post(ui_cancel_task))
         .route("/api/events", get(events))
         .route("/api/webhooks/paypal", post(webhook))
         .route("/ui/redteam", post(ui_redteam))
@@ -691,7 +1321,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/ui/agent", post(ui_agent))
         .route("/ui/catalog", post(ui_catalog))
         .route("/ui/catalog/sync",post(ui_catalog_sync))
-        .route("/paypal/return", get(|| async { Redirect::to("/") }))
+        .route("/paypal/return", get(|| async { Redirect::to("/agent") }))
         .layer(tower_http::set_header::SetResponseHeaderLayer::if_not_present(header::X_CONTENT_TYPE_OPTIONS, axum::http::HeaderValue::from_static("nosniff")))
         .layer(tower_http::set_header::SetResponseHeaderLayer::if_not_present(header::X_FRAME_OPTIONS, axum::http::HeaderValue::from_static("DENY")))
         .layer(tower_http::set_header::SetResponseHeaderLayer::if_not_present(header::REFERRER_POLICY, axum::http::HeaderValue::from_static("same-origin")))

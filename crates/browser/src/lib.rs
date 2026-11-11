@@ -32,7 +32,15 @@ mod browser {
                             .ceil()
                             .max(0.0);
                         if seconds.is_finite() {
-                            el.set_text_content(Some(&format!("{seconds:.0}s remaining")));
+                            let total = seconds as u64;
+                            let text = if total >= 3600 {
+                                format!("{}h {:02}m remaining", total / 3600, (total % 3600) / 60)
+                            } else if total >= 60 {
+                                format!("{}m {:02}s remaining", total / 60, total % 60)
+                            } else {
+                                format!("{total}s remaining")
+                            };
+                            el.set_text_content(Some(&text));
                         }
                     }
                 }

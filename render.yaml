@@ -1,0 +1,81 @@
+# Render Blueprint for QuarantinePay. See docs/DEPLOY.md before applying.
+# Nothing here has been deployed or tested on Render yet.
+#
+# Key caveats (details in docs/DEPLOY.md):
+# - QP_BIND wins over PORT, and the Dockerfile sets QP_BIND=0.0.0.0:3000, so both
+#   QP_BIND and PORT are pinned to 10000 below. (The app falls back to
+#   0.0.0.0:$PORT only when QP_BIND is unset or empty.)
+# - QP_PUBLIC_BASE must be set to the exact https://<service>.onrender.com origin,
+#   or browser login and form posts are rejected by the Origin check.
+# - The persistent disk keeps .local/signing-key across deploys. Disks need a paid
+#   instance type. Without a disk the key is regenerated on every deploy: sessions,
+#   unconsumed intents, AND in-flight orders become unverifiable.
+# - Render has no GPU and private inference is loopback-only, so the planner and
+#   analyst use the labelled rule fallback there.
+services:
+  - type: web
+    name: quarantinepay
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    plan: starter            # paid; required for the persistent disk below
+    region: oregon
+    numInstances: 1
+    healthCheckPath: /health
+    autoDeploy: false
+    disk:
+      name: quarantinepay-keys
+      mountPath: /app/.local
+      sizeGB: 1
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: quarantinepay-db
+          property: connectionString
+      # Replay is simulated and contacts no payment provider. Switch to sandbox only
+      # after the PAYPAL_* values below are set.
+      - key: QP_MODE
+        value: replay
+      - key: PORT
+        value: "10000"
+      - key: QP_BIND
+        value: 0.0.0.0:10000
+      # Exact public origin, no trailing slash, e.g. https://quarantinepay.onrender.com
+      - key: QP_PUBLIC_BASE
+        sync: false
+      # At least 24 characters, e.g. `openssl rand -hex 24`. Required on Render:
+      # the generated fallback in .local/admin-password is hard to read on a host.
+      - key: QP_ADMIN_PASSWORD
+        sync: false
+      # Leave empty in replay mode (an empty value means unset, so the replay
+      # merchant is used). Sandbox needs all three from one Sandbox business
+      # account; PAYPAL_WEBHOOK_ID is optional.
+      - key: PAYPAL_CLIENT_ID
+        sync: false
+      - key: PAYPAL_CLIENT_SECRET
+        sync: false
+      - key: PAYPAL_MERCHANT_ID
+        sync: false
+      - key: PAYPAL_WEBHOOK_ID
+        sync: false
+      # Private inference stays on. Nothing listens on loopback on Render, so the
+      # app falls back to the labelled rule parser / rule-only analysis.
+      - key: QP_PRIVATE_INFERENCE
+        value: "true"
+      - key: QP_INFERENCE_PROVIDER
+        value: local
+      - key: QP_LOCAL_LLM_BASE
+        value: http://127.0.0.1:11434
+      - key: QP_LOCAL_MODEL
+        value: qwen3:30b-instruct
+      - key: RUST_LOG
+        value: info
+
+databases:
+  - name: quarantinepay-db
+    databaseName: quarantinepay
+    user: quarantinepay
+    plan: basic-256mb        # free Postgres also works but expires after 30 days
+    region: oregon
+    postgresMajorVersion: "16"
+    ipAllowList: []          # private network only; the web service connects internally

@@ -1,0 +1,147 @@
+1
+00:00:00,300 --> 00:00:08,604
+QuarantinePay lets an AI agent shop for you and pay with PayPal, but it releases the money only for a delivery it can verify.
+
+2
+00:00:09,504 --> 00:00:12,752
+This is a real Shopify store with its own catalog.
+
+3
+00:00:12,752 --> 00:00:17,040
+My agent can buy from it, and from the wider web through Channel3.
+
+4
+00:00:18,160 --> 00:00:20,299
+I've signed one spending mandate:
+
+5
+00:00:20,299 --> 00:00:23,995
+sixty dollars per purchase, a hundred and fifty in total.
+
+6
+00:00:23,995 --> 00:00:28,792
+Now I ask for an LED desk lamp under sixty dollars, with tracked delivery.
+
+7
+00:00:30,543 --> 00:00:36,469
+Only the search terms leave the system, and every listing is treated as untrusted data.
+
+8
+00:00:36,469 --> 00:00:42,327
+The cheapest lamp tells AI agents to approve payment, so the phrase rules withhold it.
+
+9
+00:00:43,446 --> 00:00:44,792
+This one is subtler.
+
+10
+00:00:44,792 --> 00:00:49,771
+It claims the merchant is pre-verified, so delivery checks can be skipped.
+
+11
+00:00:49,771 --> 00:00:58,182
+No phrase rule matches, but Elastic vector search, run locally, finds it close to known injection attacks, and it's withheld.
+
+12
+00:00:59,305 --> 00:01:02,935
+The agent picks the Lumen Arc lamp at the store price.
+
+13
+00:01:02,935 --> 00:01:08,381
+The contract binds the exact product, its photo's hash, the price and my address.
+
+14
+00:01:08,381 --> 00:01:10,129
+What I see is what I sign.
+
+15
+00:01:11,255 --> 00:01:17,978
+It fits my mandate, so with no click, PayPal authorizes thirty-four dollars from my saved wallet.
+
+16
+00:01:17,978 --> 00:01:19,919
+The money is held, not paid.
+
+17
+00:01:21,038 --> 00:01:23,824
+Only then is the order placed in Shopify.
+
+18
+00:01:23,824 --> 00:01:27,494
+The store's admin shows it authorized and unfulfilled.
+
+19
+00:01:28,596 --> 00:01:30,803
+The seller claims it's delivered.
+
+20
+00:01:30,803 --> 00:01:31,338
+Refused:
+
+21
+00:01:31,338 --> 00:01:35,820
+the only evidence that counts is the merchant's own Shopify record.
+
+22
+00:01:37,350 --> 00:01:42,942
+In Shopify admin, the merchant fulfils the order with a UPS tracking number.
+
+23
+00:01:43,842 --> 00:01:46,829
+QuarantinePay reads the order back itself:
+
+24
+00:01:46,829 --> 00:01:52,590
+the right item, quantity one, my address, not cancelled, fulfilled with tracking.
+
+25
+00:01:52,590 --> 00:01:57,498
+Seven of seven checks pass, so the payment is captured automatically.
+
+26
+00:01:58,621 --> 00:02:03,445
+PayPal confirms the capture, and Shopify now shows the order as paid.
+
+27
+00:02:04,547 --> 00:02:07,228
+Next, a stainless steel water bottle.
+
+28
+00:02:07,228 --> 00:02:12,880
+The store has nothing relevant, so the agent searches Channel3's live catalog:
+
+29
+00:02:12,880 --> 00:02:15,779
+real products, real prices, real photos.
+
+30
+00:02:17,084 --> 00:02:20,735
+Fictional reseller agents quote for the cheapest bottle.
+
+31
+00:02:20,735 --> 00:02:27,515
+Here, capture needs a delivery proof signed by a simulated carrier's key, which the seller doesn't hold.
+
+32
+00:02:27,515 --> 00:02:30,188
+It verifies, and the payment is captured.
+
+33
+00:02:31,509 --> 00:02:37,893
+Every hold, capture and void lands in an AG Grid view of transaction intelligence.
+
+34
+00:02:38,998 --> 00:02:40,963
+PayPal holds and settles.
+
+35
+00:02:40,963 --> 00:02:42,850
+Channel3 finds products.
+
+36
+00:02:42,850 --> 00:02:45,129
+Elastic catches manipulation.
+
+37
+00:02:45,129 --> 00:02:49,846
+The agent decides, and PayPal pays only for what was proven.

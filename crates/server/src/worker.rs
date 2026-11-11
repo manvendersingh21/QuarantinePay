@@ -56,7 +56,137 @@ async fn verify(app: &App, artifact: &Value) -> Result<Verdict> {
     );
     Ok(verdict)
 }
+/// Contract verification for either purchase type. Product deliveries are proven only by a
+/// carrier-signed attestation bound to this order.
+fn verify_any(
+    contract: &quarantinepay_core::PurchaseContract,
+    order: uuid::Uuid,
+    artifact: &Value,
+) -> Result<quarantinepay_core::contract::ContractVerdict> {
+    Ok(
+        if contract
+            .product
+            .as_ref()
+            .is_some_and(|p| p.source == quarantinepay_core::product::SHOPIFY_SOURCE)
+        {
+            quarantinepay_core::product::verify_shopify_fulfilment(
+                contract,
+                &order.to_string(),
+                artifact,
+            )
+        } else if contract.product.is_some() {
+            quarantinepay_core::product::verify_product_delivery(
+                contract,
+                &order.to_string(),
+                artifact,
+                &crate::carrier::key()?.verifying_key(),
+            )
+        } else {
+            quarantinepay_core::contract::verify_contract_delivery(contract, artifact)
+        },
+    )
+}
+/// Deterministic analysis for product deliveries: the carrier attestation is the evidence, and
+/// any instruction-like seller text forces a hold. No model is consulted.
+fn product_analysis(v: &quarantinepay_core::contract::ContractVerdict, merchant: bool) -> Value {
+    let injected = !v.untrusted_instructions.is_empty();
+    let (note, clean, held) = if merchant {
+        (
+            "Fulfilment read by QuarantinePay from the merchant's Shopify order; tracking text screened deterministically",
+            "The merchant's Shopify order shows the contracted item fulfilled with tracking to the buyer's address.",
+            "The merchant recorded a fulfilment, but its tracking details try to instruct the verifier; held for the buyer.",
+        )
+    } else {
+        (
+            "Delivery proven by a carrier-signed attestation; seller text screened deterministically",
+            "The carrier attests delivery of the contracted item to the buyer's address.",
+            "The carrier confirmed delivery, but the seller's note tries to instruct the verifier; held for the buyer.",
+        )
+    };
+    json!({
+        "analyst": {"source":"rules","note":note},
+        "risk": if injected { "high" } else { "low" },
+        "injection_detected": injected,
+        "policy_hold": injected,
+        "findings": v.untrusted_instructions.iter().map(|f| json!({"rule":f.rule,"excerpt":f.excerpt,"source":"rules"})).collect::<Vec<_>>(),
+        "relevance": "on_topic",
+        "quality_concerns": [],
+        "recommended_action": if injected { "reject" } else { "approve" },
+        "summary": if injected { held } else { clean },
+        "payment_authority": false,
+        "evidence_sha256": v.evidence_sha256,
+        "analyzed_at": chrono::Utc::now(),
+    })
+}
+fn deadline_seconds(signed: &SignedIntent) -> i64 {
+    if let Some(c) = &signed.intent.contract {
+        return c.deadline_seconds as i64;
+    }
+    signed
+        .intent
+        .scenario
+        .as_ref()
+        .map_or(120_i64, |s| s.deadline_seconds as i64)
+}
+fn review_required(signed: &SignedIntent) -> bool {
+    signed.intent.contract.is_some()
+        || signed
+            .intent
+            .scenario
+            .as_ref()
+            .is_some_and(|s| s.review_required)
+}
+type AnalysisRow = (
+    String,
+    Value,
+    Option<Value>,
+    Option<Value>,
+    Option<chrono::DateTime<chrono::Utc>>,
+);
+/// Model analysis can take seconds, so it runs before the row lock is taken. It is advisory and is
+/// recorded only if the order is still quarantined with the same evidence when the lock is held.
+async fn pre_analysis(app: &App, id: uuid::Uuid) -> Result<Option<Value>> {
+    let row: Option<AnalysisRow> = sqlx::query_as(
+        "SELECT state,intent,artifact,analysis,deadline FROM orders WHERE id=$1 AND mode=$2",
+    )
+    .bind(id)
+    .bind(&app.config.mode)
+    .fetch_optional(&app.pool)
+    .await?;
+    let Some((state, intent, Some(artifact), None, deadline)) = row else {
+        return Ok(None);
+    };
+    if state != "quarantined" || deadline.is_none_or(|t| t <= chrono::Utc::now()) {
+        return Ok(None);
+    }
+    let signed: SignedIntent = serde_json::from_value(intent)?;
+    let Some(contract) = signed.intent.contract else {
+        return Ok(None);
+    };
+    let verdict = verify_any(&contract, id, &artifact)?;
+    if !verdict.passed {
+        return Ok(None);
+    }
+    if contract.product.is_some() {
+        let merchant = contract
+            .product
+            .as_ref()
+            .is_some_and(|p| p.source == quarantinepay_core::product::SHOPIFY_SOURCE);
+        return Ok(Some(product_analysis(&verdict, merchant)));
+    }
+    db::event(
+        &app.pool,
+        Some(id),
+        "ai_analysis_started",
+        json!({"analyst":crate::inference::model_label(&app.config.inference),"payment_authority":false}),
+    )
+    .await?;
+    Ok(Some(
+        crate::analyst::analyze(app, &contract, &artifact, &verdict).await,
+    ))
+}
 async fn process(app: &App, id: uuid::Uuid) -> Result<()> {
+    let analysis = pre_analysis(app, id).await?;
     let mut tx = app.pool.begin().await?;
     // Transaction-scoped advisory lock avoids duplicate provider effects across worker instances.
     let locked: bool =
@@ -119,29 +249,110 @@ async fn process(app: &App, id: uuid::Uuid) -> Result<()> {
         let verdict = if expired {
             json!({"passed":false,"reason":"verification deadline expired"})
         } else {
-            match if let Some(terms) = &signed.intent.scenario {
-                Ok(quarantinepay_core::verify_scenario(
+            match if let Some(contract) = &signed.intent.contract {
+                verify_any(contract, id, order.artifact.as_ref().unwrap())
+                    .and_then(|v| Ok(serde_json::to_value(v)?))
+            } else if let Some(terms) = &signed.intent.scenario {
+                Ok(serde_json::to_value(quarantinepay_core::verify_scenario(
                     &terms.id,
                     order.artifact.as_ref().unwrap(),
-                ))
+                ))?)
             } else {
-                verify(app, order.artifact.as_ref().unwrap()).await
+                verify(app, order.artifact.as_ref().unwrap())
+                    .await
+                    .and_then(|v| Ok(serde_json::to_value(v)?))
             } {
-                Ok(v) => serde_json::to_value(v)?,
+                Ok(v) => v,
                 Err(_) => json!({"passed":false,"reason":"verifier failed or timed out"}),
             }
         };
         let capture =
             verdict["passed"] == true && order.deadline.is_some_and(|t| t > chrono::Utc::now());
-        if capture
-            && signed
-                .intent
-                .scenario
-                .as_ref()
-                .is_some_and(|s| s.review_required)
-        {
-            sqlx::query("UPDATE orders SET state='buyer_review',verification=$2,updated_at=now() WHERE id=$1").bind(id).bind(&verdict).execute(&mut *tx).await?;
+        // Auto-capture is possible only for a mandate contract that delegated it, and only when
+        // every independent signal is clean. Anything else escalates to the buyer.
+        let mandate_auto = signed
+            .intent
+            .contract
+            .as_ref()
+            .is_some_and(|c| !c.buyer_review_required && c.mandate_id.is_some())
+            && order.mandate_id.is_some();
+        if capture && mandate_auto {
+            let Some(a) = analysis.clone() else {
+                return Ok(());
+            };
+            let clean = a["policy_hold"] == false
+                && a["injection_detected"] == false
+                && a["risk"] == "low"
+                && a["recommended_action"] == "approve"
+                && (a["analyst"]["source"] == "model"
+                    || (a["analyst"]["source"] == "rules"
+                        && signed
+                            .intent
+                            .contract
+                            .as_ref()
+                            .is_some_and(|c| c.product.is_some())));
+            if clean {
+                let request_id = uuid::Uuid::new_v4();
+                sqlx::query("UPDATE orders SET state='capture_pending',operation='capture',request_id=$2,verification=$3,analysis=$4,updated_at=now() WHERE id=$1")
+                    .bind(id).bind(request_id).bind(&verdict).bind(&a).execute(&mut *tx).await?;
+                db::event_tx(&mut tx, Some(id), "verification_complete", verdict).await?;
+                db::event_tx(
+                    &mut tx,
+                    Some(id),
+                    "ai_analysis_complete",
+                    json!({"risk":a["risk"],"injection_detected":a["injection_detected"],"recommended_action":a["recommended_action"],"analyst":a["analyst"]["source"],"payment_authority":false}),
+                )
+                .await?;
+                db::event_tx(
+                    &mut tx,
+                    Some(id),
+                    "auto_capture_policy_satisfied",
+                    json!({"mandate_id":order.mandate_id,"checks":["all deterministic contract checks passed","no untrusted instructions or policy hold","model analyst: low risk, recommends approve","delivery before deadline"],"human_click":false}),
+                )
+                .await?;
+                tx.commit().await?;
+                return Ok(());
+            }
+        }
+        if capture && review_required(&signed) {
+            let analysis = if signed.intent.contract.is_some() {
+                // Wait for the analyst; the deadline still applies while it runs.
+                let Some(analysis) = analysis else {
+                    return Ok(());
+                };
+                Some(analysis)
+            } else {
+                None
+            };
+            sqlx::query("UPDATE orders SET state='buyer_review',verification=$2,analysis=$3,updated_at=now() WHERE id=$1").bind(id).bind(&verdict).bind(&analysis).execute(&mut *tx).await?;
             db::event_tx(&mut tx, Some(id), "verification_complete", verdict).await?;
+            if let Some(a) = &analysis {
+                db::event_tx(
+                    &mut tx,
+                    Some(id),
+                    "ai_analysis_complete",
+                    json!({"risk":a["risk"],"injection_detected":a["injection_detected"],"recommended_action":a["recommended_action"],"analyst":a["analyst"]["source"],"payment_authority":false}),
+                )
+                .await?;
+                if a["policy_hold"] == true {
+                    db::event_tx(
+                        &mut tx,
+                        Some(id),
+                        "policy_hold",
+                        json!({"reason":"Untrusted instructions detected in the delivery; capture requires an explicit buyer override","findings":a["findings"]}),
+                    )
+                    .await?;
+                }
+            }
+            if mandate_auto {
+                db::event_tx(
+                    &mut tx,
+                    Some(id),
+                    "escalated_to_buyer",
+                    json!({"reason":"The delivery did not meet the mandate's auto-capture policy; the buyer decides"}),
+                )
+                .await?;
+            }
             db::event_tx(
                 &mut tx,
                 Some(id),
@@ -227,6 +438,75 @@ async fn process(app: &App, id: uuid::Uuid) -> Result<()> {
         tx.commit().await?;
         return Ok(());
     }
+    if order.state == "create_pending"
+        && let Some(mandate) = order.mandate_id
+    {
+        // Merchant-initiated authorization from the buyer's vaulted wallet: no checkout click.
+        let vault = match crate::mandate::vault_for_order(app, mandate).await {
+            Ok(v) => v,
+            Err(e) => {
+                sqlx::query("UPDATE orders SET state='declined',updated_at=now() WHERE id=$1")
+                    .bind(id)
+                    .execute(&mut *tx)
+                    .await?;
+                db::event_tx(
+                    &mut tx,
+                    Some(id),
+                    "mandate_refused_payment",
+                    json!({"mandate_id":mandate,"reason":e.to_string()}),
+                )
+                .await?;
+                tx.commit().await?;
+                return Ok(());
+            }
+        };
+        match app
+            .paypal
+            .create_vaulted(&signed, &vault, &request_id)
+            .await
+        {
+            Ok(value) => {
+                let auth = value
+                    .pointer("/purchase_units/0/payments/authorizations/0")
+                    .cloned()
+                    .unwrap_or(Value::Null);
+                ensure!(
+                    value["status"] == "COMPLETED" && auth["status"] == "CREATED",
+                    "vaulted authorization not confirmed"
+                );
+                let auth_id = auth["id"]
+                    .as_str()
+                    .ok_or_else(|| anyhow::anyhow!("missing authorization ID"))?;
+                let provider_id = value["id"].as_str().unwrap_or("");
+                sqlx::query("UPDATE orders SET state='authorized',paypal_order=$2,authorization_id=$3,deadline=now()+($5 * interval '1 second'),provider_result=$4,updated_at=now() WHERE id=$1")
+                    .bind(id).bind(provider_id).bind(auth_id).bind(&value).bind(deadline_seconds(&signed)).execute(&mut *tx).await?;
+                db::event_tx(
+                    &mut tx,
+                    Some(id),
+                    if app.config.mode == "replay" { "simulated_payment_result" } else { "provider_confirmed" },
+                    json!({"operation":"vaulted_authorize","mode":app.config.mode,"simulated":app.config.mode == "replay","human_click":false}),
+                )
+                .await?;
+                tx.commit().await?;
+            }
+            Err(error) => {
+                if let Some(failure) = error
+                    .downcast_ref::<crate::paypal::PayPalFailure>()
+                    .filter(|f| f.definitive())
+                {
+                    sqlx::query("UPDATE orders SET state='declined',updated_at=now() WHERE id=$1")
+                        .bind(id)
+                        .execute(&mut *tx)
+                        .await?;
+                    db::event_tx(&mut tx, Some(id), "provider_refused", json!({"operation":"vaulted_authorize","status":failure.status,"code":failure.name,"issues":failure.issues,"debug_id":failure.debug_id,"claimed_success":false})).await?;
+                } else {
+                    tracing::warn!(%id, error=%error, "vaulted authorization pending; retrying with stable request ID");
+                }
+                tx.commit().await?;
+            }
+        }
+        return Ok(());
+    }
     let result = match order.state.as_str() {
         "create_pending" => {
             app.paypal
@@ -274,7 +554,7 @@ async fn process(app: &App, id: uuid::Uuid) -> Result<()> {
                     let auth_id = auth["id"]
                         .as_str()
                         .ok_or_else(|| anyhow::anyhow!("missing authorization ID"))?;
-                    sqlx::query("UPDATE orders SET state='authorized',authorization_id=$2,deadline=now()+($4 * interval '1 second'),provider_result=$3,updated_at=now() WHERE id=$1").bind(id).bind(auth_id).bind(&value).bind(signed.intent.scenario.as_ref().map_or(120_i64, |s| s.deadline_seconds as i64)).execute(&mut *tx).await?;
+                    sqlx::query("UPDATE orders SET state='authorized',authorization_id=$2,deadline=now()+($4 * interval '1 second'),provider_result=$3,updated_at=now() WHERE id=$1").bind(id).bind(auth_id).bind(&value).bind(deadline_seconds(&signed)).execute(&mut *tx).await?;
                 }
                 _ => {
                     let capture = order.state == "capture_pending";
@@ -295,7 +575,28 @@ async fn process(app: &App, id: uuid::Uuid) -> Result<()> {
             tx.commit().await?;
         }
         Err(error) => {
-            if let Some(failure) = error
+            if let Some(conflict) = error.downcast_ref::<crate::paypal::ProviderStateConflict>() {
+                // The provider's own state forbids this operation. Record what PayPal reported and
+                // stop; never mark the order voided or captured on our side.
+                sqlx::query("UPDATE orders SET state='reconciliation_required' WHERE id=$1")
+                    .bind(id)
+                    .execute(&mut *tx)
+                    .await?;
+                db::event_tx(&mut tx,Some(id),"provider_state_conflict",json!({"operation":order.operation,"mode":app.config.mode,"provider_status":conflict.provider_status,"claimed_success":false})).await?;
+                tx.commit().await?;
+                tracing::warn!(%id,error=%error,"provider state conflict; reconciliation required");
+            } else if let Some(failure) = error
+                .downcast_ref::<crate::paypal::PayPalFailure>()
+                .filter(|f| f.definitive() && !f.requires_credentials())
+            {
+                sqlx::query("UPDATE orders SET state='reconciliation_required' WHERE id=$1")
+                    .bind(id)
+                    .execute(&mut *tx)
+                    .await?;
+                db::event_tx(&mut tx,Some(id),"provider_refused",json!({"operation":order.operation,"mode":app.config.mode,"status":failure.status,"code":failure.name,"issues":failure.issues,"debug_id":failure.debug_id,"claimed_success":false})).await?;
+                tx.commit().await?;
+                tracing::warn!(%id,error=%error,"provider refused the operation; reconciliation required");
+            } else if let Some(failure) = error
                 .downcast_ref::<crate::paypal::PayPalFailure>()
                 .filter(|f| f.requires_credentials())
             {
@@ -320,6 +621,9 @@ pub async fn run(app: App) {
     let mut interval = tokio::time::interval(std::time::Duration::from_secs(2));
     loop {
         interval.tick().await;
+        if let Err(e) = crate::merchant::sync(&app).await {
+            tracing::warn!(error=%e, "merchant sync failed; payments are unaffected");
+        }
         let ids=sqlx::query_scalar::<_,uuid::Uuid>("SELECT id FROM orders WHERE mode=$1 AND state IN ('create_pending','authorize_pending','authorized','quarantined','buyer_review','capture_pending','void_pending') ORDER BY updated_at LIMIT 100").bind(&app.config.mode).fetch_all(&app.pool).await;
         match ids {
             Ok(ids) => {
@@ -387,6 +691,7 @@ mod tests {
                 expires_at: chrono::Utc::now().timestamp() + 900,
                 policy_digest: policy_digest(),
                 scenario: None,
+                contract: None,
             },
             &config.key,
         )

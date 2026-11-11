@@ -19,3 +19,11 @@ local-model-serve:
 	bash scripts/local-model.sh serve
 local-model-pull:
 	bash scripts/local-model.sh pull
+
+.PHONY: elastic-start elastic-stop elastic-status
+elastic-start:
+	bash scripts/elastic.sh start
+elastic-stop:
+	bash scripts/elastic.sh stop
+elastic-status:
+	bash scripts/elastic.sh status
