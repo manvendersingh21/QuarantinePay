@@ -24,7 +24,7 @@ stop_pid() {
   fi
   rm -f "$file"
 }
-url() { grep -oE 'https://[a-z0-9-]+\.trycloudflare\.com' .local/cloudflared.log 2>/dev/null | head -1; }
+url() { grep -m1 -oE 'https://[a-z0-9-]+\.trycloudflare\.com' .local/cloudflared.log 2>/dev/null || true; }
 
 case "${1:-start}" in
   start)
