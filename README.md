@@ -35,6 +35,8 @@ Ask for a physical item, for example *"Buy me an LED desk lamp under $90 with tr
 
 Listings and prices are real; resellers, fulfilment and the carrier are simulated, and labelled so in the UI.
 
+**Photos: what you see is what you sign.** Every listing shows its photo (Channel3 `images[]`, Shopify variant or featured image). The server fetches each photo once during discovery and serves it from `/media/<sha256>` to the signed-in buyer, so the browser never contacts a third party. Photo URLs are untrusted, so the fetch is hardened: HTTPS on port 443 only, every resolved address must be public (loopback, private, link-local, CGNAT, multicast, documentation and mapped/NAT64/6to4 forms are refused) and the connection is pinned to the vetted address, at most two redirects each re-vetted, 5 s, 2 MB, and the declared type must match the magic bytes (JPEG, PNG, WebP or GIF; never SVG). Photos of listings withheld by screening are never fetched. A photo that fails a check is simply not shown, with the reason recorded (`image_note`). The selected listing's photo hash is signed into the contract (`product.image_sha256`, present only when there is a photo, so earlier contracts keep their digests). `QP_LISTING_IMAGES=false` turns photos off; `QP_MEDIA_ALLOW_LOOPBACK=1` exists only for the integration tests' mock hosts.
+
 ### Buying from a real Shopify merchant
 
 **Video:** [`demo/quarantinepay-shopify-demo.mp4`](demo/quarantinepay-shopify-demo.mp4) (2:03, narrated, recorded live: Shopify development store, PayPal Sandbox, with the store owner's admin view).
@@ -172,7 +174,7 @@ Authenticate with `Authorization: Bearer <QP_ADMIN_PASSWORD>`, or with the brows
 | `GET /api/scenarios`, `POST /api/intents`, `POST /api/checkout` | Earlier fixed five-scenario catalog flow (still available) |
 | `GET /health` | Liveness |
 
-UI pages: `/` (dashboard), `/agent`, `/agent/{task_id}`, `/intelligence`.
+UI pages: `/` (dashboard), `/agent`, `/agent/{task_id}`, `/intelligence`. Listing photos: `GET /media/{sha256}` (signed-in only; served `nosniff` with a sandbox CSP).
 
 ## Testing
 

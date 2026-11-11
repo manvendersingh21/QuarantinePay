@@ -63,7 +63,7 @@ pub async fn search(
     if crate::shopify::configured() {
         match crate::shopify::search(query).await {
             Ok(catalog) => {
-                let (results, selected, screening) = evaluate(
+                let (mut results, mut selected, screening) = evaluate(
                     app,
                     &catalog.listings,
                     budget_minor,
@@ -72,6 +72,7 @@ pub async fn search(
                     },
                 )
                 .await;
+                crate::media::attach(app, &catalog.listings, &mut results, selected.as_mut()).await;
                 let record = json!({
                     "source": "Shopify merchant (live)",
                     "merchant": catalog.merchant,
@@ -166,10 +167,12 @@ pub async fn search(
             "condition": text(&offer["condition"], 40),
             "listing_url": if url.starts_with("https://") { Some(url) } else { None },
             "description": text(&p["description"], 600),
+            "image_url": crate::media::channel3_image_url(p),
         }));
     }
-    let (results, selected, screening) =
+    let (mut results, mut selected, screening) =
         evaluate(app, &listings, budget_minor, Source::Channel3).await;
+    crate::media::attach(app, &listings, &mut results, selected.as_mut()).await;
     let note = match &selected {
         Some(p) => format!(
             "Selected the cheapest eligible real listing: \"{}\" from {}. Listings and prices are real; resellers, fulfilment and carrier are simulated.",
@@ -277,6 +280,8 @@ async fn evaluate(
                     listed_price_minor: price,
                     ship_to: SHIP_TO.into(),
                     carrier: carrier.into(),
+                    // Bound after screening, once the photo has passed the media checks.
+                    image_sha256: None,
                 },
             ));
         }

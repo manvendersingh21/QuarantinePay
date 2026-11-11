@@ -8,6 +8,7 @@ mod discovery;
 mod inference;
 mod integrations;
 mod mandate;
+mod media;
 mod merchant;
 mod paypal;
 mod shopify;
@@ -1184,6 +1185,35 @@ async fn agent_task_page(
 ) -> Api<Html<String>> {
     agent_page_inner(&app, &h, Some(id), q.message.unwrap_or_default()).await
 }
+/// A listing photo fetched and vetted during discovery, served from this origin only to a signed-in
+/// buyer. Served as an inert, sandboxed resource: never sniffed, never scriptable.
+async fn media_file(
+    State(app): State<App>,
+    h: HeaderMap,
+    Path(sha): Path<String>,
+) -> Api<Response> {
+    authenticated(&app, &h, false)?;
+    let (content_type, bytes) = media::load(&app, &sha)
+        .await?
+        .ok_or_else(|| Error(StatusCode::NOT_FOUND, "not found".into()))?;
+    Ok((
+        [
+            (header::CONTENT_TYPE, content_type),
+            (header::X_CONTENT_TYPE_OPTIONS, "nosniff".into()),
+            (
+                header::CONTENT_SECURITY_POLICY,
+                "sandbox; default-src 'none'".into(),
+            ),
+            (header::CACHE_CONTROL, "private, max-age=86400".into()),
+            (
+                header::HeaderName::from_static("cross-origin-resource-policy"),
+                "same-origin".into(),
+            ),
+        ],
+        bytes,
+    )
+        .into_response())
+}
 async fn intelligence_page(State(app): State<App>, h: HeaderMap) -> Response {
     let logged = authenticated(&app, &h, false).is_ok();
     let nonce = {
@@ -1274,6 +1304,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/agent", get(agent_page))
         .route("/agent/{id}", get(agent_task_page))
         .route("/intelligence", get(intelligence_page))
+        .route("/media/{sha256}", get(media_file))
         .route("/ui/agent/tasks", post(ui_create_task))
         .route("/ui/agent/tasks/{id}/approve", post(ui_approve_task))
         .route("/ui/agent/tasks/{id}/cancel", post(ui_cancel_task))
