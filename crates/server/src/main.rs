@@ -5,6 +5,7 @@ mod catalog_cache;
 mod config;
 mod db;
 mod discovery;
+mod elastic;
 mod inference;
 mod integrations;
 mod mandate;
@@ -1256,9 +1257,10 @@ async fn main() -> anyhow::Result<()> {
         pool,
         client,
     };
-    // Elastic is an optional screening aid; its absence must not take the payment gateway down.
-    if let Err(e) = integrations::prepare_elastic(&app).await {
-        tracing::warn!(error=%e, "Elastic screening index unavailable; continuing without it");
+    // Elastic semantic screening is an extra layer; its absence must not take the payment gateway
+    // down. Discovery records it as unavailable and retries seeding on the next search.
+    if let Err(e) = elastic::prepare(&app).await {
+        tracing::warn!(error=%e, "Elastic injection corpus unavailable; continuing without it");
     }
     tokio::spawn(worker::run(app.clone()));
     let router = Router::new()

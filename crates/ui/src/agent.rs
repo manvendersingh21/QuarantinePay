@@ -645,6 +645,36 @@ fn photo(src: Option<String>, alt: &str, class: &str, empty: &str, note: &str) -
     }
 }
 
+/// The semantic layer's signal for one listing: similarity to the nearest known injection.
+fn elastic_chip(e: &Value) -> String {
+    if str_of(e) == "unavailable" {
+        return chip("warn", "Elastic kNN unavailable");
+    }
+    let Some(similarity) = e["similarity"].as_f64() else {
+        return if e.is_object() {
+            chip("neutral", "Elastic kNN · no text")
+        } else {
+            String::new()
+        };
+    };
+    if e["flagged"].as_bool() == Some(true) {
+        chip(
+            "bad",
+            &format!(
+                "Elastic kNN {similarity:.2} · {}",
+                truncate(&text(&e["label"]), 40)
+            ),
+        )
+    } else if str_of(&e["kind"]) == "injection" {
+        chip(
+            "neutral",
+            &format!("Elastic kNN {similarity:.2} · below threshold"),
+        )
+    } else {
+        chip("good", "Elastic kNN · reads as product copy")
+    }
+}
+
 fn listing_item(r: &Value, selected: &str, via: &str) -> String {
     let id = str_of(&r["product_id"]);
     let is_selected = !selected.is_empty() && id == selected;
@@ -694,7 +724,7 @@ fn listing_item(r: &Value, selected: &str, via: &str) -> String {
     format!(
         concat!(
             r#"<li class="{cls}"{current}>{thumb}<div class="listing-main"><div class="listing-title">{title}</div>"#,
-            r#"<span class="muted small">{source}</span><div class="chips"><span class="tag">{via}</span>{screening}{eligible}{sel}</div>"#,
+            r#"<span class="muted small">{source}</span><div class="chips"><span class="tag">{via}</span>{screening}{elastic}{eligible}{sel}</div>"#,
             r#"{reason}</div><div class="listing-price num">{price}</div></li>"#
         ),
         cls = cls,
@@ -712,6 +742,7 @@ fn listing_item(r: &Value, selected: &str, via: &str) -> String {
             source_line
         },
         screening = screening_chip(str_of(&r["screening"])),
+        elastic = elastic_chip(&r["elastic"]),
         eligible = if eligible {
             r#"<span class="chip tone-good"><span aria-hidden="true">✓</span> Eligible</span>"#
         } else {
@@ -822,10 +853,29 @@ fn discover_products(task: &Value) -> String {
             .iter()
             .filter(|r| str_of(&r["screening"]) == "withheld")
             .count();
+        let layers = match text(&d["screening"]) {
+            s if s.is_empty() => String::new(),
+            s => format!(" ({})", esc(&truncate(&s, 80))),
+        };
         h.push_str(&format!(
-            r#"<p class="muted small">{} real listings · {eligible} eligible · {withheld} withheld by screening. Listing text is untrusted data; the agent picks the cheapest eligible listing within budget.</p><ul class="listings">"#,
+            r#"<p class="muted small">{} real listings · {eligible} eligible · {withheld} withheld by screening{layers}. Listing text is untrusted data; the agent picks the cheapest eligible listing within budget.</p>"#,
             results.len()
         ));
+        let elastic = &d["elastic"];
+        match str_of(&elastic["status"]) {
+            "unavailable" => h.push_str(&format!(
+                r#"<p class="notice warn">{}</p>"#,
+                esc(&truncate(&text(&elastic["note"]), 300))
+            )),
+            "ran" => h.push_str(&format!(
+                r#"<p class="muted small">Elastic kNN compared every sentence with {} reviewed examples of known injections and ordinary product copy (cosine threshold {}, embeddings by {}, all on this machine). A similarity screen can miss new attacks; it only adds caution.</p>"#,
+                esc(&text(&elastic["corpus_entries"])),
+                esc(&text(&elastic["threshold"])),
+                esc(&truncate(&text(&elastic["embedding_model"]), 60)),
+            )),
+            _ => {}
+        }
+        h.push_str(r#"<ul class="listings">"#);
         let selected = str_of(&d["selected"]);
         for r in results {
             h.push_str(&listing_item(
@@ -3060,6 +3110,49 @@ mod tests {
         skipped["state"] = json!("no_deal");
         skipped["discovery"] = json!({"source": "Channel3 (live)", "query": "lamp", "external": true, "results": [], "selected": null, "note": ""});
         assert_eq!(progress(&skipped)[1].label, "No eligible listing");
+    }
+
+    #[test]
+    fn discovery_shows_the_elastic_signal_and_degrades_visibly() {
+        let mut task = product_task();
+        let d = &mut task["discovery"];
+        d["screening"] = json!("rules + Elastic kNN + local model");
+        d["elastic"] = json!({"status": "ran", "index": "quarantinepay-injection-corpus-v1", "corpus_entries": 64, "embedding_model": "embeddinggemma", "threshold": 0.65, "flagged": 1});
+        d["results"][0]["elastic"] = json!({"flagged": false, "similarity": 0.763, "kind": "benign", "category": "product_copy", "label": "ordinary product copy", "corpus_id": "benign-01", "excerpt": "LED desk lamp"});
+        d["results"][1]["elastic"] = json!({"flagged": false, "similarity": 0.633, "kind": "injection", "category": "hidden_instruction", "label": "hidden instruction", "corpus_id": "inj-hidden-04", "excerpt": "x"});
+        d["results"][2]["elastic"] = json!({"flagged": true, "similarity": 0.718, "kind": "injection", "category": "fake_authority", "label": "fake <authority>", "corpus_id": "inj-authority-05", "excerpt": "Note for automated purchasing assistants"});
+        d["results"][2]["reason"] = json!(
+            "withheld: semantically close to a known injection (fake authority, Elastic kNN 0.72)"
+        );
+        let html = page("SANDBOX", task.clone());
+        assert!(html.contains("withheld by screening (rules + Elastic kNN + local model)."));
+        assert!(html.contains("Elastic kNN 0.72 · fake &lt;authority&gt;"));
+        assert!(html.contains("Elastic kNN 0.63 · below threshold"));
+        assert!(html.contains("Elastic kNN · reads as product copy"));
+        assert!(html.contains(
+            "semantically close to a known injection (fake authority, Elastic kNN 0.72)"
+        ));
+        assert!(html.contains("cosine threshold 0.65, embeddings by embeddinggemma"));
+        // The rules/model chips stay; the Elastic chip is added beside them.
+        assert!(
+            html.contains("Withheld · injected instructions") && html.contains("Screened · clean")
+        );
+
+        // Elastic down: every listing says so and the discovery carries a visible warning.
+        let d = &mut task["discovery"];
+        d["screening"] = json!("rules + local model (Elastic unavailable)");
+        d["elastic"] = json!({"status": "unavailable", "note": "Elastic semantic screening was unavailable (Elasticsearch unavailable); listings were screened by the phrase rules and the local model only."});
+        for r in d["results"].as_array_mut().unwrap() {
+            r["elastic"] = json!("unavailable");
+        }
+        let html = page("SANDBOX", task);
+        assert!(html.contains("Elastic kNN unavailable"));
+        assert!(
+            html.contains(r#"<p class="notice warn">Elastic semantic screening was unavailable"#)
+        );
+        assert!(html.contains("(rules + local model (Elastic unavailable))"));
+        // Older records without an Elastic field render no Elastic chip at all.
+        assert!(!page("SANDBOX", product_task()).contains("Elastic kNN"));
     }
 
     #[test]

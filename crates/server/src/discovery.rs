@@ -81,7 +81,8 @@ pub async fn search(
                     "external": true,
                     "results": results,
                     "selected": selected.as_ref().map(|p| p.product_id.clone()),
-                    "screening": screening,
+                    "screening": screening.label,
+                    "elastic": screening.elastic,
                     "note": match &selected {
                         Some(p) => format!("Selected the cheapest eligible listing in {}'s live Shopify catalog: \"{}\". The merchant sells and fulfils directly; PayPal holds the payment until the merchant's fulfilment is verified.", catalog.merchant, p.title),
                         None => format!("No eligible listing in {}'s Shopify catalog within the budget.", catalog.merchant),
@@ -187,7 +188,8 @@ pub async fn search(
             "external": true,
             "results": results,
             "selected": selected.as_ref().map(|p| p.product_id.clone()),
-            "screening": screening,
+            "screening": screening.label,
+            "elastic": screening.elastic,
             "note": note,
             "merchant_search": merchant_record,
         }),
@@ -196,33 +198,52 @@ pub async fn search(
     })
 }
 
-/// Screen every listing (phrase rules per listing plus one grounded model pass), apply the
-/// eligibility rules, and pick the cheapest eligible one.
+/// Which screening layers ran, and the Elastic layer's record for the discovery.
+struct Screening {
+    label: String,
+    elastic: Value,
+}
+
+/// The untrusted listing text every screening layer sees: title, vendor and description.
+fn untrusted_text(l: &Value) -> String {
+    [&l["title"], &l["brand"], &l["description"]]
+        .iter()
+        .filter_map(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// Screen every listing (phrase rules per listing, Elastic kNN against known injections per
+/// sentence, and one grounded model pass), apply the eligibility rules, and pick the cheapest
+/// eligible one.
 async fn evaluate(
     app: &App,
     listings: &[Value],
     budget_minor: u64,
     source: Source<'_>,
-) -> (Vec<Value>, Option<ProductTerms>, &'static str) {
+) -> (Vec<Value>, Option<ProductTerms>, Screening) {
+    // Every layer runs on every listing; a layer that is unavailable is recorded, not skipped.
+    let semantic = crate::elastic::screen(app, listings).await;
     let model_flags = screen_with_model(app, listings).await;
     let mut results = Vec::new();
     let mut best: Option<(u64, ProductTerms)> = None;
     for (i, l) in listings.iter().enumerate() {
-        let corpus = format!(
-            "{} {}",
-            l["title"].as_str().unwrap_or(""),
-            l["description"].as_str().unwrap_or("")
-        );
-        let rules_flag = !untrusted_instruction_findings(&corpus).is_empty();
-        let flagged = rules_flag || model_flags.as_ref().is_some_and(|f| f.contains(&i));
+        let rules_flag = !untrusted_instruction_findings(&untrusted_text(l)).is_empty();
+        let model_flag = model_flags.as_ref().is_some_and(|f| f.contains(&i));
+        let elastic_flag = semantic.evidence(i).filter(|e| e.flagged);
+        let flagged = rules_flag || model_flag || elastic_flag.is_some();
         let price = l["price_minor"].as_u64().unwrap_or(0);
         let delivered = match source {
             Source::Merchant { .. } => price,
             Source::Channel3 => min_floor(price),
         };
         let mut reasons = Vec::new();
-        if flagged {
+        if rules_flag || model_flag {
             reasons.push("withheld: listing text addresses the agent".to_string());
+        }
+        if let Some(e) = elastic_flag {
+            reasons.push(e.reason());
         }
         if l["currency"] != "USD" || price == 0 {
             reasons.push("no USD price".into());
@@ -293,13 +314,44 @@ async fn evaluate(
             "reason": if eligible { "within budget, in stock, new".to_string() } else { reasons.join("; ") },
         }));
     }
+    // Per-listing evidence from each layer, so the record shows why a listing was withheld.
+    use crate::elastic::Screen;
+    for (i, r) in results.iter_mut().enumerate() {
+        let l = &listings[i];
+        let mut by = Vec::new();
+        if !untrusted_instruction_findings(&untrusted_text(l)).is_empty() {
+            by.push("rules");
+        }
+        if semantic.evidence(i).is_some_and(|e| e.flagged) {
+            by.push("elastic");
+        }
+        if model_flags.as_ref().is_some_and(|f| f.contains(&i)) {
+            by.push("model");
+        }
+        r["flagged_by"] = json!(by);
+        r["elastic"] = match &semantic {
+            Screen::Ran { .. } => semantic.evidence(i).map_or_else(
+                || json!({"flagged": false, "note": "no text to compare"}),
+                |e| e.to_json(),
+            ),
+            Screen::Unavailable(_) => json!("unavailable"),
+            Screen::NotConfigured => Value::Null,
+        };
+    }
+    let label = match (&semantic, model_flags.is_some()) {
+        (Screen::Ran { .. }, true) => "rules + Elastic kNN + local model",
+        (Screen::Ran { .. }, false) => "rules + Elastic kNN (model unavailable)",
+        (Screen::Unavailable(_), true) => "rules + local model (Elastic unavailable)",
+        (Screen::Unavailable(_), false) => "rules only (Elastic and model unavailable)",
+        (Screen::NotConfigured, true) => "rules + local model",
+        (Screen::NotConfigured, false) => "rules only (model unavailable)",
+    };
     (
         results,
         best.map(|(_, p)| p),
-        if model_flags.is_some() {
-            "rules + local model"
-        } else {
-            "rules only (model unavailable)"
+        Screening {
+            label: label.into(),
+            elastic: semantic.record(),
         },
     )
 }

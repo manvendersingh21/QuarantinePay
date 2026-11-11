@@ -8,7 +8,8 @@ export OLLAMA_MODELS="$qp_root/.local/models"
 export OLLAMA_NO_CLOUD=1
 export OLLAMA_CONTEXT_LENGTH=8192
 export OLLAMA_NUM_PARALLEL=1
-export OLLAMA_MAX_LOADED_MODELS=1
+# Two slots: the screening model (Qwen) and the small embedding model stay loaded together.
+export OLLAMA_MAX_LOADED_MODELS=2
 case "${1:-status}" in
  install)
   command -v zstd >/dev/null || { echo 'Install zstd first (apt-get install zstd).'; exit 1; }
@@ -24,7 +25,8 @@ case "${1:-status}" in
   exec "$qp_binary" serve
   ;;
  pull)
-  exec "$qp_binary" pull qwen3:30b-instruct
+  "$qp_binary" pull qwen3:30b-instruct
+  exec "$qp_binary" pull "${QP_EMBED_MODEL:-embeddinggemma}"
   ;;
  status)
   exec "$qp_binary" ps
