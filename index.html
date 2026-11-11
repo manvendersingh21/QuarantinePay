@@ -48,17 +48,24 @@ a{color:var(--mint)}
 <div class="brand"><span class="logo">Q</span>QuarantinePay</div>
 <div class="eyebrow">PAYPAL AI HACKATHON · AGENTIC COMMERCE</div>
 <h1>An AI agent that buys on its own — and can’t be tricked into paying.</h1>
-<p class="lede">Sign one spending mandate. The buyer agent then discovers real products (live via Channel3) or service sellers, negotiates, signs a contract, and authorizes payment through your saved PayPal wallet, with no approval clicks. Money is captured only when deterministic checks and an AI analyst independently verify the delivery. Prompt-injected deliveries can't talk their way into a payment.</p>
+<p class="lede">Sign one spending mandate. The buyer agent then discovers real products (a live Shopify store first, then Channel3) or service sellers, screens every listing with phrase rules, Elastic vector search and a local model, negotiates, signs a contract, and authorizes payment through your saved PayPal wallet, with no approval clicks. Money is captured only when deterministic checks and an AI analyst independently verify the delivery. Prompt-injected deliveries can't talk their way into a payment.</p>
 <div class="cta">
 <a class="btn primary" href="https://deck-com-range-occasional.trycloudflare.com/agent" rel="noopener">Open live demo →</a>
 <a class="btn secondary" href="https://github.com/manvendersingh21/QuarantinePay">Source code</a>
 <a class="btn secondary" href="https://github.com/manvendersingh21/QuarantinePay/blob/main/docs/VALIDATION.md">Verification evidence</a>
 </div>
-<p class="note">The live demo runs the full stack (Rust gateway, local Qwen3 model on a GPU, real PayPal <strong>Sandbox</strong>) behind a Cloudflare tunnel; sign-in required. Live link last updated 2026-11-10 23:51 UTC. If it doesn't load, the video below shows the same flow.</p>
+<p class="note">The live demo runs the full stack (Rust gateway, local Qwen3 model on a GPU, real PayPal <strong>Sandbox</strong>) behind a Cloudflare tunnel; sign-in required. Live link last updated 2026-11-11 01:26 UTC. If it doesn't load, the video below shows the same flow.</p>
 
+<video controls preload="metadata" poster="poster-main.png">
+<source src="quarantinepay-demo.mp4" type="video/mp4">
+<track kind="captions" src="quarantinepay-demo.en.vtt" srclang="en" label="English" default>
+</video>
+<p class="note">The full demo (2:52), recorded live: a real Shopify development store and its storefront, the merchant fulfilling in Shopify admin, live Channel3 discovery, Elastic semantic screening, PayPal Sandbox authorize and capture, and the AG Grid intelligence view. Waits for the model and PayPal are cut.</p>
+
+<h2>Autonomous mandate (earlier demo)</h2>
 <video controls preload="metadata" poster="poster.png">
 <source src="quarantinepay-autonomous-demo.mp4" type="video/mp4">
-<track kind="captions" src="quarantinepay-autonomous-demo.en.vtt" srclang="en" label="English" default>
+<track kind="captions" src="quarantinepay-autonomous-demo.en.vtt" srclang="en" label="English">
 </video>
 
 <h2>Buying a real product</h2>
