@@ -65,6 +65,7 @@ pub async fn search(
             Ok(catalog) => {
                 let (mut results, mut selected, screening) = evaluate(
                     app,
+                    query,
                     &catalog.listings,
                     budget_minor,
                     Source::Merchant {
@@ -172,7 +173,7 @@ pub async fn search(
         }));
     }
     let (mut results, mut selected, screening) =
-        evaluate(app, &listings, budget_minor, Source::Channel3).await;
+        evaluate(app, query, &listings, budget_minor, Source::Channel3).await;
     crate::media::attach(app, &listings, &mut results, selected.as_mut()).await;
     let note = match &selected {
         Some(p) => format!(
@@ -219,6 +220,7 @@ fn untrusted_text(l: &Value) -> String {
 /// eligible one.
 async fn evaluate(
     app: &App,
+    query: &str,
     listings: &[Value],
     budget_minor: u64,
     source: Source<'_>,
@@ -244,6 +246,11 @@ async fn evaluate(
         }
         if let Some(e) = elastic_flag {
             reasons.push(e.reason());
+        }
+        if let Some(gap) =
+            quarantinepay_core::product::relevance_gap(query, l["title"].as_str().unwrap_or(""))
+        {
+            reasons.push(gap);
         }
         if l["currency"] != "USD" || price == 0 {
             reasons.push("no USD price".into());

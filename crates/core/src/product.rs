@@ -234,6 +234,56 @@ pub fn negotiate_product(objective: &Objective, product: &ProductTerms) -> Negot
 
 /// A Shopify merchant sells at its own fixed listed price: the agent can accept or walk away, but
 /// there is no one to haggle with. The transcript records exactly that.
+/// Words that never identify a product.
+const QUERY_STOPWORDS: &[&str] = &[
+    "a", "an", "the", "for", "with", "and", "or", "of", "to", "in", "on", "my", "me", "some",
+    "new", "under", "below", "usd", "buy", "get", "find", "cheap", "best",
+];
+
+fn product_words(text: &str) -> Vec<String> {
+    text.to_lowercase()
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|w| {
+            !w.is_empty() && !QUERY_STOPWORDS.contains(w) && !w.chars().all(|c| c.is_ascii_digit())
+        })
+        .map(singular)
+        .collect()
+}
+
+fn singular(w: &str) -> String {
+    for (suffix, replace) in [
+        ("ies", "y"),
+        ("sses", "ss"),
+        ("ches", "ch"),
+        ("shes", "sh"),
+        ("xes", "x"),
+    ] {
+        if let Some(stem) = w.strip_suffix(suffix) {
+            return format!("{stem}{replace}");
+        }
+    }
+    match w.strip_suffix('s') {
+        Some(stem) if stem.len() > 2 && !w.ends_with("ss") => stem.to_string(),
+        _ => w.to_string(),
+    }
+}
+
+/// Deterministic relevance gate: the product the buyer asked for is the last product word of the
+/// search terms (the head noun: "LED desk *lamp*", "stainless steel water *bottle*"). A listing is
+/// only eligible if that word appears in its title. Returns why not, or `None` when it matches.
+/// A loose catalog search can return anything; the agent must not buy a plant for a bottle.
+pub fn relevance_gap(query: &str, title: &str) -> Option<String> {
+    let head = product_words(query).pop()?;
+    let title_words = product_words(title);
+    if title_words.contains(&head) {
+        None
+    } else {
+        Some(format!(
+            "not what was asked for: \"{head}\" is not in the title"
+        ))
+    }
+}
+
 pub fn negotiate_direct(
     objective: &Objective,
     product: &ProductTerms,
@@ -809,6 +859,37 @@ pub fn product_fixture(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn relevance_requires_the_requested_product_in_the_title() {
+        assert_eq!(
+            relevance_gap("LED desk lamp", "Lumen Arc LED Desk Lamp"),
+            None
+        );
+        assert_eq!(
+            relevance_gap(
+                "noise cancelling headphones",
+                "Fieldnote Studio Over-Ear Headphones"
+            ),
+            None
+        );
+        assert_eq!(relevance_gap("headphones", "Studio Headphone"), None);
+        assert_eq!(
+            relevance_gap("water bottles", "Insulated Water Bottle 750 ml"),
+            None
+        );
+        assert!(
+            relevance_gap(
+                "stainless steel water bottle",
+                "Greenleaf Potted Desk Succulent"
+            )
+            .unwrap()
+            .contains("\"bottle\"")
+        );
+        // Known limit: only the head noun is checked, so an accessory titled with it still passes.
+        assert!(relevance_gap("desk lamp", "Lamp oil for desk heaters, 1 l").is_none());
+        assert_eq!(relevance_gap("", "Anything"), None);
+    }
+
     use super::*;
     fn listing() -> ProductTerms {
         ProductTerms {
