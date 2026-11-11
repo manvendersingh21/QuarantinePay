@@ -6,7 +6,7 @@ Ten minutes with the live build. Everything here runs on PayPal **Sandbox** (tes
 
 1. Go to the showcase, https://manvendersingh21.github.io/QuarantinePay/, and click **Open live demo**. The button always points at the current server URL, which can change if the server restarts.
 2. Sign in with the password from the Devpost **testing instructions**. It is not in this public repository.
-3. Open **Agent console**.
+3. Open **Agent console**. A short guided tour starts on your first visit; **✦ Take the tour** in the header replays it. On any purchase, the guide in the bottom-right corner explains each step as you scroll.
 
 Discovery takes about 20–70 s, because a 30B model and an embedding model screen every listing on a single GPU. The page refreshes itself.
 
