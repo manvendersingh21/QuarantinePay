@@ -350,7 +350,7 @@ pub async fn place_order(
             "order": {
                 "currency": "USD",
                 "test": true,
-                "lineItems": [{"variantId": p.product_id, "quantity": 1, "priceSet": money}],
+                "lineItems": [{"variantId": p.product_id, "quantity": 1, "priceSet": money, "requiresShipping": true}],
                 "shippingAddress": {"firstName":"Quarantine","lastName":"Buyer","address1":SHIP_TO_ADDRESS1,"city":SHIP_TO_CITY,"provinceCode":SHIP_TO_PROVINCE,"countryCode":SHIP_TO_COUNTRY,"zip":SHIP_TO_ZIP},
                 "financialStatus": "AUTHORIZED",
                 "transactions": [{"kind":"AUTHORIZATION","status":"SUCCESS","gateway":"QuarantinePay (PayPal Sandbox)","authorizationCode":authorization_id,"amountSet":money}],

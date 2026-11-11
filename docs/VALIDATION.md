@@ -17,6 +17,29 @@ An earlier API-driven run the same day also confirmed the same paths: order `3AP
 
 **Live credential refusal on the void path.** This ran in an isolated schema on a second instance. An agent order was authorized with the correct credentials (authorization `9GW695555N976531G`) and taken to buyer review. The instance was then restarted with a deliberately wrong PayPal client secret, and the buyer rejected. PayPal refused the void with a real `401 invalid_client` (debug ID `f164647b1c55e`). QuarantinePay recorded `provider_permission_required`, moved the order to `reconciliation_required`, and kept the authorization ID, the `void` operation and its request ID. A fresh PayPal read showed the authorization still `CREATED`, so nothing was claimed. The operator then voided it with the correct credentials (HTTP 204), and PayPal confirms `VOIDED`. 
 
+**Full sponsor demo video (`demo/quarantinepay-demo.mp4`, 2:52, recorded live 2026-11-11).** Each narration line is a separate live recording, and waits for the model and PayPal are cut. The store owner's admin footage is a page-only screencast of the real Shopify admin, cropped to the order panel.
+- **Mandate:** USD 60 per purchase, USD 150 total, auto-capture for clean deliveries. One PayPal vault approval.
+- **Shopify purchase:** "Buy me an LED desk lamp under $60 with tracked delivery."
+  - The live store catalog returned three lamps.
+  - Brightline (USD 22.00) was withheld by the phrase rules and by Elastic kNN 0.834 (`inj-agent-02`, addresses the agent).
+  - Halo Slim (USD 27.00) was withheld by Elastic kNN 0.718 (`inj-authority-05`, fake authority); no phrase rule matches it.
+  - Lumen Arc (USD 34.00) was selected. The contract binds its photo's SHA-256.
+  - PayPal authorized `60X02778HK8847448` from the vault with no click. QuarantinePay then placed Shopify order #1015 (`gid://shopify/Order/8530057101399`), with shipping required.
+  - The seller's own claim was refused (`unverified_claim_rejected`).
+  - **The merchant fulfilled in the Shopify admin UI:** "Mark as fulfilled", tracking `1Z999AA10123456784`, carrier UPS (detected by Shopify).
+  - 7/7 checks passed and the payment was captured automatically. Authorization **CAPTURED**, capture `0GU93196UH4946412` **COMPLETED**, USD 34.00. The capture was recorded on the Shopify order (`capture_recorded`), which shows Paid and Fulfilled.
+- **Channel3 purchase:** "Buy me a stainless steel water bottle under $40 with tracked delivery."
+  - The relevance gate found nothing matching in the store, so live Channel3 returned 8 real bottles with photos. All read as product copy to Elastic.
+  - The cheapest was "Stainless Steel Water Bottle" from outlet.verabradley.com (Vera Bradley, listed USD 13.98).
+  - Fictional reseller ParcelPoint Supply agreed USD 14.79 delivered. It was authorized from the vault as `1PY90318WX8524401`.
+  - The simulated carrier's signed proof was verified. Authorization **CAPTURED**, capture `2LJ3079776594323K` **COMPLETED**, USD 14.79.
+- **AG Grid:** the intelligence grid lists both captures at the top.
+- **All PayPal states** were confirmed by fresh API reads after recording.
+- **Other orders from the same session:**
+  - A first take of the same script: #1014, authorization `07893370G4026372L` **CAPTURED**, capture `40Y4186153874881P`; bottle authorization `8UU78582A9077992M` **CAPTURED**, capture `9YG86235J12636254`.
+  - Two rehearsal orders, #1012 (`4JN68769BY8853426`) and #1013 (`61449753SL5056155`), were cancelled by the merchant and are **VOIDED**.
+- **Fix found while recording:** QuarantinePay created Shopify orders without `requiresShipping`, so Shopify showed "Shipping not required". Order line items now set `requiresShipping: true`, and #1014 onwards ship with tracking.
+
 **Buying from a real Shopify merchant (live Shopify development store + PayPal Sandbox, 2026-11-10).**
 
 The seller here is a real Shopify store: the partner development store `convinienve-store.myshopify.com` ("Convinienve Store"), reached through a Dev Dashboard app with the client-credentials grant and Admin GraphQL `2026-10`. QuarantinePay confirms `partnerDevelopment: true` before any write. The fulfilment was performed as the store owner with `scripts/shopify-merchant.py`, which is the same Admin API action as clicking **Fulfill items** in Shopify admin. QuarantinePay never runs that script.
