@@ -212,6 +212,25 @@ fn decimal(minor: u64) -> String {
     format!("{}.{:02}", minor / 100, minor % 100)
 }
 
+/// Ask Shopify's image CDN for a 480 px wide rendition, so stored thumbnails stay small.
+fn sized_image(url: &str) -> String {
+    match reqwest::Url::parse(url) {
+        Ok(mut u) if u.scheme() == "https" && u.host_str() == Some("cdn.shopify.com") => {
+            let kept: Vec<(String, String)> = u
+                .query_pairs()
+                .filter(|(k, _)| k != "width" && k != "height")
+                .map(|(k, v)| (k.into_owned(), v.into_owned()))
+                .collect();
+            u.query_pairs_mut()
+                .clear()
+                .extend_pairs(kept)
+                .append_pair("width", "480");
+            u.to_string()
+        }
+        _ => url.to_string(),
+    }
+}
+
 pub struct Catalog {
     pub merchant: String,
     pub domain: String,
@@ -232,7 +251,7 @@ pub async fn search(terms: &str) -> Result<Catalog> {
         .take(8)
         .collect();
     ensure!(!words.is_empty(), "no product search terms");
-    const Q: &str = "query($q:String!){ shop{ name myshopifyDomain currencyCode plan{partnerDevelopment} } products(first:20, query:$q, sortKey:RELEVANCE){ nodes{ id title handle vendor status description(truncateAt:600) onlineStoreUrl variants(first:5){ nodes{ id title price availableForSale } } } } }";
+    const Q: &str = "query($q:String!){ shop{ name myshopifyDomain currencyCode plan{partnerDevelopment} } products(first:20, query:$q, sortKey:RELEVANCE){ nodes{ id title handle vendor status description(truncateAt:600) onlineStoreUrl featuredImage{ url altText } variants(first:5){ nodes{ id title price availableForSale image{ url } } } } } }";
     let mut data = gql(Q, json!({"q":format!("{} status:active", words.join(" "))})).await?;
     if data["products"]["nodes"]
         .as_array()
@@ -265,6 +284,12 @@ pub async fn search(terms: &str) -> Result<Catalog> {
             } else {
                 format!("{} — {vt}", text(&p["title"], 200))
             };
+            // The variant's own photo when it has one, else the product's featured photo.
+            let image = [&v["image"]["url"], &p["featuredImage"]["url"]]
+                .into_iter()
+                .map(|u| text(u, 1000))
+                .find(|u| !u.is_empty())
+                .map(|u| sized_image(&u));
             listings.push(json!({
                 "product_id": text(&v["id"], 200),
                 "title": title,
@@ -276,6 +301,7 @@ pub async fn search(terms: &str) -> Result<Catalog> {
                 "condition": "new",
                 "listing_url": url,
                 "description": text(&p["description"], 600),
+                "image_url": image,
             }));
             if listings.len() >= 8 {
                 break;
@@ -508,6 +534,26 @@ mod tests {
         ] {
             assert!(validate_domain(bad).is_err(), "{bad}");
         }
+    }
+    #[test]
+    fn shopify_cdn_images_are_resized() {
+        assert_eq!(
+            sized_image("https://cdn.shopify.com/s/files/1/lamp.jpg?v=17"),
+            "https://cdn.shopify.com/s/files/1/lamp.jpg?v=17&width=480"
+        );
+        assert_eq!(
+            sized_image("https://cdn.shopify.com/s/files/1/lamp.jpg?width=2048&v=1"),
+            "https://cdn.shopify.com/s/files/1/lamp.jpg?v=1&width=480"
+        );
+        assert_eq!(
+            sized_image("https://cdn.shopify.com/lamp.png"),
+            "https://cdn.shopify.com/lamp.png?width=480"
+        );
+        // Other hosts are left alone (the media fetcher vets them).
+        assert_eq!(
+            sized_image("https://img.example/a.jpg?width=9"),
+            "https://img.example/a.jpg?width=9"
+        );
     }
     #[test]
     fn money_round_trips() {

@@ -41,6 +41,18 @@ pub struct ProductTerms {
     pub listed_price_minor: u64,
     pub ship_to: String,
     pub carrier: String,
+    /// SHA-256 of the listing photo QuarantinePay fetched and showed the buyer, so the contract
+    /// binds the exact image that was on screen. Absent when no photo passed the media checks, so
+    /// contracts without one keep their digests and signatures.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub image_sha256: Option<String>,
+}
+
+/// A lowercase hex SHA-256, the only form a listing photo is ever referenced by.
+pub fn is_sha256_hex(s: &str) -> bool {
+    s.len() == 64
+        && s.bytes()
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
 }
 
 /// Fictional reseller agents that source a real listing and ship it. Pricing is a deterministic
@@ -390,6 +402,10 @@ pub(crate) fn validate_product(c: &PurchaseContract) -> Result<()> {
     );
     ensure!(p.listed_price_minor >= 100, "listing price required");
     ensure!(p.ship_to == SHIP_TO, "unsupported shipping terms");
+    ensure!(
+        p.image_sha256.as_deref().is_none_or(is_sha256_hex),
+        "listing photo must be referenced by its SHA-256"
+    );
     if p.source == SHOPIFY_SOURCE {
         // Direct purchase from the merchant's own catalog at its own price.
         ensure!(c.seller_id == SHOPIFY_SELLER_ID, "unknown merchant");
@@ -805,6 +821,7 @@ mod tests {
             listed_price_minor: 6_400,
             ship_to: SHIP_TO.into(),
             carrier: CARRIER.into(),
+            image_sha256: None,
         }
     }
     fn objective(budget: u64) -> Objective {
@@ -843,6 +860,40 @@ mod tests {
         let mut t = c.clone();
         t.product.as_mut().unwrap().ship_to = "Attacker, 1 Elsewhere St".into();
         assert!(t.validate().is_err());
+    }
+    #[test]
+    fn listing_photo_is_bound_by_digest_only_when_present() {
+        let n = negotiate_product(&objective(8_000), &listing());
+        let c = compile_product_contract(&objective(8_000), &listing(), &n, None).unwrap();
+        // No photo: the field is not serialized, so earlier contracts keep their digests.
+        assert!(!serde_json::to_string(&c).unwrap().contains("image_sha256"));
+        let sha = "ab".repeat(32);
+        let mut with = listing();
+        with.image_sha256 = Some(sha.clone());
+        let n2 = negotiate_product(&objective(8_000), &with);
+        let p = compile_product_contract(&objective(8_000), &with, &n2, None).unwrap();
+        p.validate().unwrap();
+        assert_ne!(
+            p.digest(),
+            c.digest(),
+            "the photo is part of what is signed"
+        );
+        let round: PurchaseContract =
+            serde_json::from_str(&serde_json::to_string(&p).unwrap()).unwrap();
+        assert_eq!(round.digest(), p.digest());
+        // Swapping the photo changes the digest; a non-hash reference is refused.
+        let mut t = p.clone();
+        t.product.as_mut().unwrap().image_sha256 = Some("cd".repeat(32));
+        assert_ne!(t.digest(), p.digest());
+        for bad in [
+            "https://evil.example/x.png".to_string(),
+            "AB".repeat(32),
+            "ab".repeat(31),
+        ] {
+            let mut t = p.clone();
+            t.product.as_mut().unwrap().image_sha256 = Some(bad.clone());
+            assert!(t.validate().is_err(), "{bad}");
+        }
     }
     #[test]
     fn only_carrier_attestations_prove_delivery() {
@@ -893,6 +944,7 @@ mod tests {
             listed_price_minor: 3_400,
             ship_to: SHIP_TO.into(),
             carrier: SHOPIFY_FULFILMENT.into(),
+            image_sha256: None,
         }
     }
     fn snapshot(order_ref: &str) -> Value {
