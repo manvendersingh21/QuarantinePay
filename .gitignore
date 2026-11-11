@@ -5,3 +5,4 @@
 target/
 *.log
 assets/quarantinepay_browser*
+.claude/worktrees/
