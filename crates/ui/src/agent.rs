@@ -2170,6 +2170,105 @@ const MERCHANT_STEP_TITLES: [&str; 9] = [
     "Settlement",
 ];
 
+/// Plain-language guide for each pipeline step: what happens here, and what to look at. Shown by
+/// the scroll-along guide (assets/guide.js) as the step reaches the middle of the screen.
+type Guide = [(&'static str, &'static str); 9];
+
+const SHARED_UNDERSTAND: (&str, &str) = (
+    "The local AI turns your words into a bounded objective: what to buy, the budget, the constraints. A dollar amount you write is a hard cap the AI cannot raise.",
+    "The extracted search terms. Only those leave QuarantinePay, never your budget, address or request text.",
+);
+const SHARED_APPROVAL: (&str, &str) = (
+    "Under an active mandate, deterministic rules check the signature, cap, budget, seller and scope, and the agent signs with no click. Otherwise you approve this exact contract by its digest.",
+    "The list of mandate rules that were checked, or the approve button if the purchase falls outside your mandate.",
+);
+const SHARED_PAYMENT: (&str, &str) = (
+    "PayPal Sandbox authorizes, which means it holds the money. Nothing is paid to anyone yet; the hold is captured or voided later.",
+    "Authorized vs captured amounts and the PayPal IDs. With a mandate the money comes from your saved wallet, with no checkout click.",
+);
+const SHARED_SETTLEMENT: (&str, &str) = (
+    "Every check passed, so the hold is captured (automatically under a mandate when clean). A failure, cancellation or missed deadline voids it. An unclear PayPal result becomes reconciliation, never a claimed success.",
+    "Captured or voided, and why. Only results PayPal itself confirms are shown as final.",
+);
+const MERCHANT_GUIDE: Guide = [
+    SHARED_UNDERSTAND,
+    (
+        "The agent searches the connected Shopify store first, then Channel3. Every listing is untrusted text: phrase rules, Elastic semantic search and the local AI screen it before anything is chosen.",
+        "Red cards were withheld for trying to manipulate the agent. The chips show which layer caught them. A photo is only fetched for listings that passed.",
+    ),
+    (
+        "A real merchant sells at its listed price, so there is no haggling: the agent confirms the live store price against your budget.",
+        "The short transcript with the merchant: request for quote, fixed store price, accepted.",
+    ),
+    (
+        "The exact item, price, ship-to address and the photo's SHA-256 become a canonical contract. Approval is bound to its digest, so nothing can change after you approve.",
+        "The product photo and its hash: what you see is what is signed.",
+    ),
+    SHARED_APPROVAL,
+    SHARED_PAYMENT,
+    (
+        "QuarantinePay places the order in the Shopify store only after PayPal holds the money. The merchant has 15 minutes to fulfil.",
+        "Try the Merchant simulator: ship it, ship with injected tracking text, or cancel. Or try the seller's own \"delivered\" claim; it is refused.",
+    ),
+    (
+        "QuarantinePay reads the merchant's own Shopify order itself: exactly this item, quantity 1, to the buyer's address, fulfilled with tracking, not cancelled. Tracking text is screened for injected instructions too.",
+        "7 checks, each with its evidence. A seller's word never counts.",
+    ),
+    SHARED_SETTLEMENT,
+];
+const PRODUCT_GUIDE: Guide = [
+    SHARED_UNDERSTAND,
+    (
+        "Nothing relevant in the store, so the agent searched Channel3 live. Real listings and prices, each screened as untrusted text by the rules, Elastic and the local AI.",
+        "Real retailer listings with photos fetched and served by QuarantinePay; ineligible ones show why.",
+    ),
+    (
+        "Fictional reseller agents quote a delivered price for the chosen real listing. The agent haggles but never bids above your budget.",
+        "The negotiation transcript and the agreed delivered price.",
+    ),
+    (
+        "The real listing, delivered price, ship-to address and carrier become a canonical contract, approved by its digest.",
+        "The exact listing in the contract and its photo hash.",
+    ),
+    SHARED_APPROVAL,
+    SHARED_PAYMENT,
+    (
+        "The simulated reseller ships. You choose what it does: a genuine carrier-signed delivery, a forged proof, a substitute item, a parcel still in transit, or an injected note.",
+        "Try the forged proof: it is signed by the seller, not the carrier, and voids the hold.",
+    ),
+    (
+        "The proof must be signed by the carrier's key, which the seller does not hold, and must match this order, item and address, with status delivered.",
+        "Each check with its evidence; a single failure voids the hold.",
+    ),
+    SHARED_SETTLEMENT,
+];
+const REPORT_GUIDE: Guide = [
+    SHARED_UNDERSTAND,
+    (
+        "Three fictional seller agents receive the request; any that cannot meet the scope decline.",
+        "Which sellers bid and which declined.",
+    ),
+    (
+        "Deterministic haggling: the buyer never bids above budget, and sellers never go below their floor.",
+        "The round-by-round transcript and the winning offer.",
+    ),
+    (
+        "The winning offer becomes a canonical contract: price, scope, sections, competitors, sources and deadline. You approve its digest.",
+        "The contract terms and the digest you approve.",
+    ),
+    SHARED_APPROVAL,
+    SHARED_PAYMENT,
+    (
+        "The seller delivers a Markdown report into quarantine. You choose which one: compliant, incomplete, or with injected instructions.",
+        "Try the report with injected instructions.",
+    ),
+    (
+        "Structural checks (sections, distinct competitors, HTTPS sources, size) plus injection rules and the local AI analyst. The AI can add caution; it can never clear a failed check.",
+        "Any policy hold: approving then requires an explicit, audited risk acknowledgement.",
+    ),
+    SHARED_SETTLEMENT,
+];
+
 fn pipeline(task: &Value, replay: bool, events: &[Value]) -> String {
     let mut stages = progress(task);
     autonomy_labels(&mut stages, task, events);
@@ -2184,12 +2283,12 @@ fn pipeline(task: &Value, replay: bool, events: &[Value]) -> String {
         verification(task),
         settlement(task, events),
     ];
-    let titles = if is_merchant(task) {
-        &MERCHANT_STEP_TITLES
+    let (titles, guide) = if is_merchant(task) {
+        (&MERCHANT_STEP_TITLES, &MERCHANT_GUIDE)
     } else if is_product(task) {
-        &PRODUCT_STEP_TITLES
+        (&PRODUCT_STEP_TITLES, &PRODUCT_GUIDE)
     } else {
-        &STEP_TITLES
+        (&STEP_TITLES, &REPORT_GUIDE)
     };
     let mut h = String::from(r#"<ol class="pipeline">"#);
     for (i, ((title, st), body)) in titles.iter().zip(&stages).zip(bodies).enumerate() {
@@ -2210,9 +2309,11 @@ fn pipeline(task: &Value, replay: bool, events: &[Value]) -> String {
             St::Pending => "neutral",
         };
         h.push_str(&format!(
-            r#"<li class="step {cls}"{current}><span class="step-marker" aria-hidden="true">{marker}</span><div class="step-body"><div class="step-head"><h3>{title}</h3>{chip}</div>{body}</div></li>"#,
+            r#"<li class="step {cls}"{current} data-guide="{what}" data-guide-look="{look}"><span class="step-marker" aria-hidden="true">{marker}</span><div class="step-body"><div class="step-head"><h3>{title}</h3>{chip}</div>{body}</div></li>"#,
             cls = st.status.class(),
             chip = chip(tone, &st.label),
+            what = esc(guide[i].0),
+            look = esc(guide[i].1),
         ));
     }
     h.push_str("</ol>");
@@ -2532,7 +2633,7 @@ pub fn render_agent(
         logged_in,
         message: &message,
         body_attrs: format!(r#" data-event-id="{event_id}" data-auth="{logged_in}""#),
-        head: r#"<script type="module" src="/assets/loader.js"></script>"#.into(),
+        head: r#"<script type="module" src="/assets/loader.js"></script><script src="/assets/guide.js" defer></script>"#.into(),
         content,
     })
 }
@@ -3255,6 +3356,26 @@ mod tests {
         let report = page("REPLAY", reviewed_task("REPLAY", "authorized"));
         assert!(report.contains("Deliver compliant report"));
         assert!(!report.contains("forged"));
+    }
+
+    #[test]
+    fn every_step_carries_a_plain_language_guide() {
+        for task in [
+            product_order_task("authorized"),
+            reviewed_task("REPLAY", "authorized"),
+        ] {
+            let html = page("SANDBOX", task);
+            assert!(html.contains(r#"<script src="/assets/guide.js" defer></script>"#));
+            assert_eq!(
+                html.matches("data-guide=\"").count(),
+                9,
+                "one guide per step"
+            );
+            assert_eq!(html.matches("data-guide-look=\"").count(), 9);
+        }
+        let mut merchant = product_order_task("authorized");
+        merchant["proposal"]["product"]["source"] = json!("shopify");
+        assert!(page("SANDBOX", merchant).contains("Try the Merchant simulator"));
     }
 
     #[test]

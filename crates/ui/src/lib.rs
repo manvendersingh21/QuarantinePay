@@ -487,6 +487,48 @@ textarea:focus { border-color: var(--mint); outline: 3px solid #087f5b33; outlin
   .mono-kv { grid-template-columns: minmax(0, 1fr); gap: 0; } .mono-kv dd { margin-bottom: 4px; }
   .delivery-checks li { padding: 7px 8px; }
 }
+/* In-app guidance: guided tour and scroll-along guide (assets/guide.js). */
+.tour-launch { white-space: nowrap; font: inherit; font-size: 12px; font-weight: 650; color: var(--mint); background: #edf8f2; border: 1px solid #b8ddcb; border-radius: 999px; padding: 6px 13px; cursor: pointer; transition: background .15s ease, transform .1s ease; }
+.tour-launch:hover { background: #dff2e8; }
+.tour-launch:active { transform: scale(.97); }
+.tour { position: fixed; inset: 0; z-index: 1000; }
+.tour-spot { position: fixed; border-radius: 12px; box-shadow: 0 0 0 9999px rgba(17, 24, 21, .58); outline: 2px solid #3fbf8f; outline-offset: 0; transition: top .3s cubic-bezier(.2,.8,.2,1), left .3s cubic-bezier(.2,.8,.2,1), width .3s cubic-bezier(.2,.8,.2,1), height .3s cubic-bezier(.2,.8,.2,1); pointer-events: auto; }
+.tour-tip { position: fixed; width: min(360px, calc(100vw - 24px)); background: #fff; border-radius: 14px; padding: 18px 18px 14px; box-shadow: 0 18px 50px rgba(0,0,0,.28); animation: tour-in .2s ease-out; }
+.tour-tip.docked { left: 12px !important; right: 12px; bottom: 12px; top: auto !important; width: auto; }
+@keyframes tour-in { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+.tour-count { font-size: 10px; letter-spacing: 1.5px; color: var(--mint); font-weight: 700; text-transform: uppercase; }
+.tour-title { font-size: 17px; margin: 6px 0 6px; letter-spacing: -.2px; }
+.tour-text { margin: 0 0 12px; color: #404040; font-size: 13.5px; }
+.tour-dots { display: flex; gap: 5px; margin-bottom: 12px; }
+.tour-dots span { width: 6px; height: 6px; border-radius: 50%; background: #d4d4d4; }
+.tour-dots span.on { background: var(--mint); width: 16px; border-radius: 3px; }
+.tour-nav { display: flex; align-items: center; gap: 8px; }
+.tour-gap { flex: 1; }
+.tour-nav button { font: inherit; font-size: 13px; border-radius: 8px; padding: 7px 13px; cursor: pointer; border: 1px solid var(--line); background: #fff; color: #262626; }
+.tour-nav .tour-next { background: var(--mint); border-color: var(--mint); color: #fff; font-weight: 650; }
+.tour-nav .tour-skip { border: 0; padding-left: 0; color: var(--muted); background: none; }
+.tour-nav button:disabled { opacity: .4; cursor: default; }
+.tour-nav button:focus-visible, .tour-launch:focus-visible, .guide-card button:focus-visible, .guide-pill:focus-visible { outline: 2px solid var(--mint); outline-offset: 2px; }
+.guide-card { position: fixed; right: 20px; bottom: 20px; z-index: 900; width: 320px; background: #fff; border: 1px solid #cfe7da; border-radius: 14px; padding: 14px 16px; box-shadow: 0 12px 34px rgba(16, 60, 40, .16); }
+.guide-head { display: flex; justify-content: space-between; align-items: center; }
+.guide-label { font-size: 10px; letter-spacing: 1.5px; color: var(--mint); font-weight: 700; text-transform: uppercase; }
+.guide-hide { font: inherit; font-size: 12px; color: var(--muted); background: none; border: 0; cursor: pointer; padding: 2px 4px; }
+.guide-title { font-size: 15px; margin: 4px 0 6px; }
+.guide-what { margin: 0 0 8px; font-size: 13px; color: #333; }
+.guide-look { margin: 0 0 10px; font-size: 12.5px; color: #4b5b53; background: #f3faf6; border-radius: 8px; padding: 7px 9px; }
+.guide-look strong { color: var(--mint); }
+.guide-next { font: inherit; font-size: 12.5px; font-weight: 650; color: var(--mint); background: none; border: 1px solid #b8ddcb; border-radius: 8px; padding: 5px 11px; cursor: pointer; }
+.guide-pill { position: fixed; right: 20px; bottom: 20px; z-index: 900; font: inherit; font-size: 13px; font-weight: 650; color: #fff; background: var(--mint); border: 0; border-radius: 999px; padding: 9px 15px; box-shadow: 0 8px 22px rgba(8, 127, 91, .3); cursor: pointer; }
+.guide-card[hidden], .guide-pill[hidden], body.touring .guide-card, body.touring .guide-pill { display: none !important; }
+li.step.guide-on.guide-active > .step-body { box-shadow: 0 0 0 2px #a9dcc5; border-radius: 12px; transition: box-shadow .2s ease; }
+@media (max-width: 700px) {
+  .guide-card { left: 12px; right: 12px; bottom: 12px; width: auto; padding: 12px 14px; }
+  .guide-pill { right: 12px; bottom: 12px; }
+  .guide-look { display: none; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .tour-spot, .tour-tip, li.step.guide-on.guide-active > .step-body { transition: none; animation: none; }
+}
 "#;
 
 #[cfg(test)]
